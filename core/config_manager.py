@@ -23,7 +23,7 @@ class ConfigManager:
   DEFAULTS: dict[str, Any] = {
     "windowSize": {"width": 1200, "height": 800},
     "minWindowSize": {"width": 900, "height": 600},
-    "theme": "neumorphism_dark",
+    "theme": "system",
     "primaryColor": "#1E66FF",
     "logLevel": "INFO",
     "enableVerbose": False,
