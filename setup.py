@@ -13,7 +13,8 @@ REQUIRED_PACKAGES = [
     "PyQt6",
     "pydantic",
     "python-dateutil",
-    "qtawesome"
+    "qtawesome",
+    "rich",
 ]
 
 
