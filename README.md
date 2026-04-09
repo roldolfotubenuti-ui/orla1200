@@ -2,11 +2,11 @@
   <img src="assets/icon.ico" alt="TikTok Scheduler" width="80" />
 </p>
 
-<h3 align="center">TikTok Scheduler</h3>
+<h1 align="center">TikTok Scheduler</h1>
 
 <p align="center">
-  A desktop GUI tool for bulk scheduling/uploading videos to TikTok<br/>
-  Via chromium based browser automation
+  A Windows desktop application for scheduling and uploading TikTok videos in bulk<br/>
+  using a real Chromium browser driven by Playwright automation.
 </p>
 
 <p align="center">
@@ -17,134 +17,133 @@
   <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License" />
 </p>
 
-## About
+## Overview
 
-**TikTok Scheduler** is a desktop application that automates bulk video scheduling on TikTok. It uses Playwright to control a real Chromium browser behind the scenes, interacting with TikTok's web upload page exactly as a user would, filling in captions, setting future schedule dates, and submitting the upload.
+TikTok Scheduler is a PyQt6 desktop client built for creators and operators who need a repeatable workflow for preparing uploads, generating schedule windows, and managing multiple TikTok accounts. The application automates the TikTok web upload flow through Playwright while keeping account cookies, scheduled uploads, published history, and UI state organized locally.
 
-### Key Features
+## Highlights
 
-- **Bulk scheduling**: Scan a folder of `.mp4` files and schedule them all in one batch
-- **Smart time slots**: Auto-generate evenly spaced schedule slots across a configurable date range
-- **Multi-account**: Switch between accounts via cookie-based session management
-- **Folder history**: Dropdown with previously used video folders
-- **Published tracking**: Automatically tracks which videos have been published and prevents re-uploads
-- **Schedule rules**: Configurable time windows, intervals, randomization, and daily limits
-- **Headless mode**: Run browser automation in the background without a visible window
-- **Copyright check**: Detects potential copyright music issues during upload
-- **Dark neumorphic UI**: Modern, polished dark-themed interface
+- Bulk upload preparation from local `.mp4` folders
+- Configurable scheduling windows with date and time rules
+- Cookie-based multi-account management
+- Published and scheduled file tracking per account
+- Modern desktop UI with multiple application themes
+- Rich terminal logging for execution feedback
+- Optional headless browser execution
+- Copyright and content quality feedback surfaced during upload
+
+## Requirements
+
+- Python 3.10 or newer
+- Windows 10 or Windows 11
+- Chromium installed through Playwright
 
 ## Installation
 
-### Prerequisites
-
-- **Python 3.10+** — [Download here](https://www.python.org/downloads/)
-- **Windows OS** (tested on Windows 10/11)
-
-### Step 1 — Clone the Repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/davins/tiktok-scheduler.git
 cd tiktok-scheduler
 ```
 
-### Step 2 — Install Python Dependencies
+### 2. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 3 — Install Playwright Chromium
-
-Playwright requires a Chromium browser binary to be downloaded separately:
+### 3. Install the Playwright browser runtime
 
 ```bash
 python -m playwright install chromium
 ```
 
-> [!TIP]
-> You can skip Steps 2-3 entirely by using **RUN.bat** — it automatically checks and installs everything for you.
+> Tip: `RUN.bat` can bootstrap dependencies and launch the application automatically.
 
-## Running the App
+## Running the application
 
-<img width="480" height="256" alt="Screenshot 2026-02-21 205444" src="https://github.com/user-attachments/assets/8cb724cc-486f-4e1c-8fc3-55b78f0eda2d" />
+### Option A: use the Windows launcher
 
-### Option A: Double-click `RUN.bat`
+Double-click `RUN.bat` from the project root.
 
-The easiest way. Just double-click `RUN.bat` in the project root. It will:
-
-1. ✅ Check that Python is available
-2. ✅ Install any missing pip packages
-3. ✅ Install Playwright Chromium if not found
-4. ✅ Launch the application
-
-### Option B: Terminal
+### Option B: run from a terminal
 
 ```bash
 python main.py
 ```
 
-## Adding an Account
+## Account setup
 
-TikTok Scheduler uses **cookie-based authentication** (no username/password needed):
+TikTok Scheduler uses exported browser cookies instead of username/password login inside the app.
 
-1. Log in to [TikTok Creator](https://www.tiktok.com/creator) in your browser
-2. Export your cookies as JSON (using a browser extension like [_Cookie-Editor_](https://chromewebstore.google.com/detail/cookie-editor/hlkenndednhfkekhgcdicdfddnkalmdm))
-3. In the app, click the **+** button next to the account dropdown
-4. Enter your TikTok username and paste the cookie JSON
-5. Click **Save** — the account is ready to use
+1. Sign in to TikTok Creator in your browser.
+2. Export cookies as JSON with a browser cookie extension.
+3. Open the application and go to the Accounts tab.
+4. Add the TikTok username and paste the cookie JSON.
+5. Save the account for future scheduling sessions.
 
-An example cookie format is provided in `example_cookie.json`.
+An example payload is included in `example_cookie.json`.
 
 ## Configuration
 
-Edit `config.json` to customize behavior:
+Runtime options are loaded from `config.json`.
 
-| Key                              | Description                                | Default   |
-| -------------------------------- | ------------------------------------------ | --------- |
-| `headlessDefault`                | Run browser without UI                     | `true`    |
-| `logLevel`                       | Log verbosity (`DEBUG`, `INFO`, `WARNING`) | `DEBUG`   |
-| `primaryColor`                   | UI accent color (hex)                      | `#1E66FF` |
-| `scheduleRules.minOffsetMinutes` | Minimum minutes from now for scheduling    | `15`      |
-| `scheduleRules.maxOffsetMonths`  | Maximum months ahead for scheduling        | `1`       |
-| `scheduleRules.minuteStep`       | Minute granularity for time slots          | `5`       |
+| Key | Description | Default |
+| --- | --- | --- |
+| `windowSize` | Initial application window size | `1200 x 800` |
+| `minWindowSize` | Minimum configured window size | `900 x 600` |
+| `theme` | Initial theme name | `system` |
+| `primaryColor` | Accent color used by the base palette | `#1E66FF` |
+| `headlessDefault` | Default browser visibility mode | `true` |
+| `logLevel` | Logging verbosity | `INFO` |
+| `scheduleRules.minOffsetMinutes` | Minimum delay before a schedule can start | `15` |
+| `scheduleRules.maxOffsetMonths` | Maximum schedule range | `1` |
+| `scheduleRules.minuteStep` | Minute rounding step | `5` |
 
----
+## Project structure
 
-## 📁 Project Structure
-
-```
+```text
 tiktok-scheduler/
-├── main.py                  # App entry point
-├── config.json              # Runtime configuration
-├── setup.py                 # Dependency checker / installer
-├── RUN.bat                  # One-click Windows launcher
-├── requirements.txt         # Python dependencies
-│
-├── core/                    # Core business logic
-│   ├── browser_manager.py   # Playwright browser lifecycle
-│   ├── config_manager.py    # Config loading & validation
-│   ├── cookie_manager.py    # Cookie I/O & session injection
-│   ├── dom_handler.py       # TikTok page DOM automation
-│   ├── schedule_rule_engine.py  # Time slot validation rules
-│   ├── scheduler.py         # Slot generation engine
-│   ├── uploader.py          # Upload orchestration
-│   └── logger_manager.py    # Logging facade
-│
-├── gui/                     # PyQt6 GUI layer
-│   ├── main_window.py       # Main window layout
-│   ├── controller.py        # Signal handling & state management
-│   ├── components.py        # Reusable widget components
-│   └── styles.py            # Neumorphic dark theme stylesheet
-│
-├── utils/                   # Shared utilities
-├── assets/                  # App icon
-├── storage/                 # Runtime data (gitignored)
-│   ├── schedules/           # Per-user schedule records
-│   └── publishes/           # Per-user published records
-└── cookies/                 # Session cookies (gitignored)
+|-- main.py
+|-- config.json
+|-- setup.py
+|-- requirements.txt
+|-- RUN.bat
+|-- assets/
+|-- core/
+|   |-- browser_manager.py
+|   |-- config_manager.py
+|   |-- cookie_manager.py
+|   |-- dom_handler.py
+|   |-- logger_manager.py
+|   |-- schedule_rule_engine.py
+|   |-- scheduler.py
+|   `-- uploader.py
+|-- gui/
+|   |-- controller.py
+|   |-- main_window.py
+|   |-- components/
+|   |-- controllers/
+|   |-- dialogs/
+|   |-- layouts/
+|   |-- pages/
+|   |-- services/
+|   |-- tables/
+|   |-- theme/
+|   `-- widgets/
+|-- storage/
+|   |-- publishes/
+|   `-- schedules/
+|-- cookies/
+`-- utils/
 ```
 
----
+## Notes
+
+- Storage and cookie data are intended to remain local to the workstation.
+- The GUI and core upload logic are separated so UI changes do not require rewriting the automation pipeline.
+- Published records are stored under `storage/publishes/` and scheduled records under `storage/schedules/`.
 
 ## License
 
