@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
 from gui.controller import GUIController
 from gui.main_window import MainWindow
-from gui.styles import StyleSheet
+from gui.theme import ThemeManager
 
 
 class Application:
@@ -46,26 +46,25 @@ class Application:
     config_path = self._project_root / "config.json"
     config = ConfigManager(config_path)
 
-    # Apply primary colour from config
-    StyleSheet.apply_primary_color(config.primary_color)
-
-    # Create Qt app — Fusion style is required on Windows so that
-    # QSS ``background-color: transparent`` on QWidget inherits from
-    # the parent paint chain instead of rendering as black.
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setStyleSheet(StyleSheet.global_stylesheet())
+    theme_manager = ThemeManager(
+      app=app,
+      initial_mode=config.theme,
+      accent_color=config.primary_color,
+    )
 
     # Set global application icon
     icon_path = self._project_root / "assets" / "icon.ico"
     app.setWindowIcon(QIcon(str(icon_path)))
 
     # Create main window
-    window = MainWindow()
+    window = MainWindow(theme_manager=theme_manager)
 
     # Apply window dimensions from config
     w, h = config.window_size
     window.resize(w, h)
+    window.lock_normal_size(window.size())
     mw, mh = config.min_window_size
     window.setMinimumSize(mw, mh)
 
