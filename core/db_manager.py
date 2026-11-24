@@ -22,40 +22,40 @@ CURRENT_SCHEMA_VERSION = 1
 
 DEFAULT_DEPARTMENTS = [
     {
-        "id": "dept_instagram",
-        "name": "Instagram",
+        "id": "dept_tiktok_01",
+        "name": "TikTok 01",
         "employee_id": "01",
-        "drawer_id": "top_left",
+        "drawer_id": "drawer-01",
     },
     {
-        "id": "dept_mercadolivre",
-        "name": "Mercado Livre",
+        "id": "dept_tiktok_02",
+        "name": "TikTok 02",
         "employee_id": "02",
-        "drawer_id": "top_right",
+        "drawer_id": "drawer-02",
     },
     {
-        "id": "dept_shorts",
-        "name": "Shorts",
+        "id": "dept_tiktok_03",
+        "name": "TikTok 03",
         "employee_id": "03",
-        "drawer_id": "center_left",
+        "drawer_id": "drawer-03",
     },
     {
-        "id": "dept_tiktok",
-        "name": "TikTok",
+        "id": "dept_tiktok_04",
+        "name": "TikTok 04",
         "employee_id": "04",
-        "drawer_id": "center_right",
+        "drawer_id": "drawer-04",
     },
     {
-        "id": "dept_tiktokshop",
-        "name": "TikTok Shop",
+        "id": "dept_tiktok_05",
+        "name": "TikTok 05",
         "employee_id": "05",
-        "drawer_id": "bottom_left",
+        "drawer_id": "drawer-05",
     },
     {
-        "id": "dept_youtube",
-        "name": "YouTube",
+        "id": "dept_tiktok_06",
+        "name": "TikTok 06",
         "employee_id": "06",
-        "drawer_id": "bottom_right",
+        "drawer_id": "drawer-06",
     },
 ]
 

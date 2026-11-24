@@ -38,18 +38,18 @@ logger = logging.getLogger("tks.folder_watcher")
 SUPPORTED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi", ".mkv", ".flv"}
 
 # Exact folder mapping as mandated:
-# Folder 1 -> Dept 01 (Instagram) -> employee-01 -> drawer-01 -> Account 01
-# Folder 2 -> Dept 02 (Mercado Livre) -> employee-02 -> drawer-02 -> Account 02
-# Folder 3 -> Dept 03 (Shorts) -> employee-03 -> drawer-03 -> Account 03
-# Folder 4 -> Dept 04 (TikTok) -> employee-04 -> drawer-04 -> Account 04
-# Folder 5 -> Dept 05 (TikTok Shop) -> employee-05 -> drawer-05 -> Account 05
-# Folder 6 -> Dept 06 (YouTube) -> employee-06 -> drawer-06 -> Account 06
+# Folder 1 -> Dept 01 (TikTok 01) -> employee-01 -> drawer-01 -> Account 01 (@unamyti)
+# Folder 2 -> Dept 02 (TikTok 02) -> employee-02 -> drawer-02 -> Account 02 (@valueini)
+# Folder 3 -> Dept 03 (TikTok 03) -> employee-03 -> drawer-03 -> Account 03 (@vinihack537)
+# Folder 4 -> Dept 04 (TikTok 04) -> employee-04 -> drawer-04 -> Account 04 (@vinihack979)
+# Folder 5 -> Dept 05 (TikTok 05) -> employee-05 -> drawer-05 -> Account 05 (@vinihack120)
+# Folder 6 -> Dept 06 (TikTok 06) -> employee-06 -> drawer-06 -> Account 06 (@viniciusferraz218)
 
 FOLDER_DEPT_MAPPING: dict[int, dict[str, Any]] = {
     1: {
         "folder_index": 1,
-        "department_id": "dept_instagram",
-        "department_name": "Instagram",
+        "department_id": "dept_tiktok_01",
+        "department_name": "TikTok 01",
         "employee_id": "employee-01",
         "drawer_id": "drawer-01",
         "account_id": "10d617eb-e1a7-4ed7-b8b3-acda804f3f98",
@@ -57,8 +57,8 @@ FOLDER_DEPT_MAPPING: dict[int, dict[str, Any]] = {
     },
     2: {
         "folder_index": 2,
-        "department_id": "dept_mercadolivre",
-        "department_name": "Mercado Livre",
+        "department_id": "dept_tiktok_02",
+        "department_name": "TikTok 02",
         "employee_id": "employee-02",
         "drawer_id": "drawer-02",
         "account_id": "37bc39cd-077f-4920-95d1-b11746f0399f",
@@ -66,8 +66,8 @@ FOLDER_DEPT_MAPPING: dict[int, dict[str, Any]] = {
     },
     3: {
         "folder_index": 3,
-        "department_id": "dept_shorts",
-        "department_name": "Shorts",
+        "department_id": "dept_tiktok_03",
+        "department_name": "TikTok 03",
         "employee_id": "employee-03",
         "drawer_id": "drawer-03",
         "account_id": "669df47e-4abf-4efd-a870-934295fa7a58",
@@ -75,8 +75,8 @@ FOLDER_DEPT_MAPPING: dict[int, dict[str, Any]] = {
     },
     4: {
         "folder_index": 4,
-        "department_id": "dept_tiktok",
-        "department_name": "TikTok",
+        "department_id": "dept_tiktok_04",
+        "department_name": "TikTok 04",
         "employee_id": "employee-04",
         "drawer_id": "drawer-04",
         "account_id": "a874cfb3-700c-4b6f-aa3c-ba1e2856894e",
@@ -84,8 +84,8 @@ FOLDER_DEPT_MAPPING: dict[int, dict[str, Any]] = {
     },
     5: {
         "folder_index": 5,
-        "department_id": "dept_tiktokshop",
-        "department_name": "TikTok Shop",
+        "department_id": "dept_tiktok_05",
+        "department_name": "TikTok 05",
         "employee_id": "employee-05",
         "drawer_id": "drawer-05",
         "account_id": "e7e6bd57-59de-4272-82b8-f20ce2487e83",
@@ -93,8 +93,8 @@ FOLDER_DEPT_MAPPING: dict[int, dict[str, Any]] = {
     },
     6: {
         "folder_index": 6,
-        "department_id": "dept_youtube",
-        "department_name": "YouTube",
+        "department_id": "dept_tiktok_06",
+        "department_name": "TikTok 06",
         "employee_id": "employee-06",
         "drawer_id": "drawer-06",
         "account_id": "4baf0564-985f-4273-b559-9787cdd86c0d",

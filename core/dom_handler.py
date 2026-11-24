@@ -704,9 +704,8 @@ class DOMHandler:
         (el) => {
           if (!el) return true;
           if (el.disabled) return true;
-          if (el.getAttribute('aria-disabled') === 'true') return true;
           const classList = Array.from(el.classList);
-          if (classList.some(c => c.toLowerCase().includes('disabled'))) return true;
+          if (classList.some(c => c.toLowerCase().includes('disabled') && !c.toLowerCase().includes('disabled-hover'))) return true;
           return false;
         }
       """)
@@ -811,6 +810,13 @@ class DOMHandler:
     button_enable_wait_sec: float | None = 0.0 if initial_post_ready else None
 
     while elapsed <= max_wait_seconds:
+      # Dismiss any lingering popups or modal overlays during polling
+      try:
+        await self.dismiss_allow_schedule()
+        await self.dismiss_all_popups()
+      except Exception:
+        pass
+
       try:
         status_key = await self._page.evaluate(_JS_GET_STATUS)
       except Exception as e:

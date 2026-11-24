@@ -28,12 +28,12 @@ class AccountManager:
     """Central manager for Multiaccount TikTok profiles in TKS Engine."""
 
     DEPARTMENTS: list[str] = [
-        "Instagram",
-        "Mercado Livre",
-        "Shorts",
-        "TikTok",
-        "TikTok Shop",
-        "YouTube",
+        "TikTok 01",
+        "TikTok 02",
+        "TikTok 03",
+        "TikTok 04",
+        "TikTok 05",
+        "TikTok 06",
     ]
 
     def __init__(self, data_dir: Path | None = None, cookies_dir: Path | None = None) -> None:

@@ -38,7 +38,7 @@ def get_account_booked_dates(account_id: str, db: DatabaseManager | None = None)
             """
             SELECT schedule_time FROM jobs
             WHERE account_id = ?
-              AND status IN ('READY_FOR_UPLOAD', 'ASSIGNED', 'RUNNING', 'UPLOADING', 'PROCESSING', 'SUBMITTING', 'SCHEDULED', 'PUBLISHED')
+              AND status IN ('READY_FOR_UPLOAD', 'ASSIGNED', 'RUNNING', 'UPLOADING', 'PROCESSING', 'SUBMITTING', 'SCHEDULED', 'PUBLISHED', 'ARCHIVED')
               AND schedule_time IS NOT NULL
             """,
             (account_id,),

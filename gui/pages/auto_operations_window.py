@@ -42,73 +42,73 @@ from core.queue_manager import JobRecord, JobStatus, QueueManager
 from core.round_robin_router import RoundRobinRouter
 from gui.theme.manager import ThemeManager
 
-# Mapeamento oficial dos 6 personagens e departamentos
+# Mapeamento oficial dos 6 personagens e contas (100% Exclusivo TikTok)
 CHARACTERS_MAP = [
     {
         "id": "employee-01",
-        "dept_id": "dept_instagram",
-        "name": "Executivo Voxel",
-        "role": "Instagram",
+        "dept_id": "dept_tiktok_01",
+        "name": "Personagem 01",
+        "role": "TikTok 01",
         "folder": "1",
         "drawer": "drawer-01",
         "account": "@unamyti",
-        "emoji": "🧑‍💼",
-        "color": "#E1306C",
-    },
-    {
-        "id": "employee-02",
-        "dept_id": "dept_mercadolivre",
-        "name": "Pequeno Lutador",
-        "role": "Mercado Livre",
-        "folder": "2",
-        "drawer": "drawer-02",
-        "account": "@valueini",
-        "emoji": "🥋",
-        "color": "#FFE600",
-    },
-    {
-        "id": "employee-03",
-        "dept_id": "dept_shorts",
-        "name": "Pato Executivo",
-        "role": "Shorts",
-        "folder": "3",
-        "drawer": "drawer-03",
-        "account": "@vinihack537",
-        "emoji": "🦆",
-        "color": "#FF0000",
-    },
-    {
-        "id": "employee-04",
-        "dept_id": "dept_tiktok",
-        "name": "Jogador Voxel",
-        "role": "TikTok",
-        "folder": "4",
-        "drawer": "drawer-04",
-        "account": "@vinihack979",
-        "emoji": "🏀",
+        "emoji": "📱",
         "color": "#00F2FE",
     },
     {
-        "id": "employee-05",
-        "dept_id": "dept_tiktokshop",
-        "name": "Cientista Louco",
-        "role": "TikTok Shop",
-        "folder": "5",
-        "drawer": "drawer-05",
-        "account": "@vinihack120",
-        "emoji": "🔬",
+        "id": "employee-02",
+        "dept_id": "dept_tiktok_02",
+        "name": "Personagem 02",
+        "role": "TikTok 02",
+        "folder": "2",
+        "drawer": "drawer-02",
+        "account": "@valueini",
+        "emoji": "📱",
         "color": "#FE2C55",
     },
     {
+        "id": "employee-03",
+        "dept_id": "dept_tiktok_03",
+        "name": "Personagem 03",
+        "role": "TikTok 03",
+        "folder": "3",
+        "drawer": "drawer-03",
+        "account": "@vinihack537",
+        "emoji": "📱",
+        "color": "#25F4EE",
+    },
+    {
+        "id": "employee-04",
+        "dept_id": "dept_tiktok_04",
+        "name": "Personagem 04",
+        "role": "TikTok 04",
+        "folder": "4",
+        "drawer": "drawer-04",
+        "account": "@vinihack979",
+        "emoji": "📱",
+        "color": "#FF0050",
+    },
+    {
+        "id": "employee-05",
+        "dept_id": "dept_tiktok_05",
+        "name": "Personagem 05",
+        "role": "TikTok 05",
+        "folder": "5",
+        "drawer": "drawer-05",
+        "account": "@vinihack120",
+        "emoji": "📱",
+        "color": "#00F2FE",
+    },
+    {
         "id": "employee-06",
-        "dept_id": "dept_youtube",
-        "name": "Cavaleiro Real",
-        "role": "YouTube",
+        "dept_id": "dept_tiktok_06",
+        "name": "Personagem 06",
+        "role": "TikTok 06",
         "folder": "6",
         "drawer": "drawer-06",
         "account": "@viniciusferraz218",
-        "emoji": "🛡️",
-        "color": "#9C27B0",
+        "emoji": "📱",
+        "color": "#FE2C55",
     },
 ]
 
@@ -151,7 +151,7 @@ class CharacterIllustrationCard(QFrame):
         title_box.setSpacing(1)
         self.lbl_name = QLabel(f"Mesa {data['folder']} — {data['role']}")
         self.lbl_name.setStyleSheet("font-size: 13px; font-weight: 800; color: #FFFFFF;")
-        self.lbl_char = QLabel(f"{data['name']} ({data['drawer']})")
+        self.lbl_char = QLabel(f"Conta: {data['account']} • {data['drawer']}")
         self.lbl_char.setStyleSheet("font-size: 11px; color: #8F95A3;")
         title_box.addWidget(self.lbl_name)
         title_box.addWidget(self.lbl_char)
@@ -394,7 +394,7 @@ class AutoOperationsMainWindow(QMainWindow):
         self.table.setHorizontalHeaderLabels([
             "Pasta",
             "Arquivo de Vídeo",
-            "Personagem / Conta",
+            "Mesa TikTok",
             "Entrada (Detectado)",
             "Data Programada (TikTok)",
             "Legenda",
@@ -640,12 +640,21 @@ class AutoOperationsMainWindow(QMainWindow):
                     if status == "SCHEDULED":
                         scheduled_count += 1
 
-                    # Mapear pasta e personagem
-                    char_info = next((c for c in CHARACTERS_MAP if c["dept_id"] == dept_id), None)
+                    # Mapear pasta e conta TikTok (com suporte retroativo)
+                    legacy_dept_map = {
+                        "dept_instagram": "dept_tiktok_01",
+                        "dept_mercadolivre": "dept_tiktok_02",
+                        "dept_shorts": "dept_tiktok_03",
+                        "dept_tiktok": "dept_tiktok_04",
+                        "dept_tiktokshop": "dept_tiktok_05",
+                        "dept_youtube": "dept_tiktok_06",
+                    }
+                    normalized_dept = legacy_dept_map.get(dept_id, dept_id)
+                    char_info = next((c for c in CHARACTERS_MAP if c["dept_id"] == normalized_dept), None)
                     folder_str = char_info["folder"] if char_info else "-"
                     char_name = char_info["role"] if char_info else dept_id
                     acc_str = char_info["account"] if char_info else acc_id
-                    emoji = char_info["emoji"] if char_info else "📁"
+                    emoji = char_info["emoji"] if char_info else "📱"
 
                     created_str = self._format_relative_time(created_at)
 

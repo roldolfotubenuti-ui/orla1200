@@ -18,6 +18,7 @@ from core.account_manager import AccountManager
 from core.account_model import AccountAuthStatus
 from core.browser_runtime import BrowserRuntime
 from core.daily_scheduler_rule import calculate_next_daily_slot, get_account_booked_dates
+from core.db_manager import DatabaseManager
 from core.dom_handler import DOMHandler
 from core.logger_manager import LoggerManager
 from core.office_event_bridge import OfficeEventBridge
@@ -237,19 +238,23 @@ class AccountExecutor:
                     sched_dt = None
 
                 # Regra Inteligente de Agendamento Diário:
-                # Se o horário já passou hoje (ou faltam menos de 25 min), ou se já há outro vídeo agendado para esta data,
-                # o personagem avança automaticamente para o próximo dia consecutivo às 18:00
+                # Se o horário já passou hoje (ou faltam menos de 25 min), ou se já há outro vídeo agendado para esta data nesta conta,
+                # o motor avança automaticamente para o próximo dia consecutivo às 18:00
                 now_sp = datetime.now()
                 is_expired = False
+                db_instance = getattr(self, "_db", None) or getattr(self._account_mgr, "_db", None) or DatabaseManager.get_instance()
+                booked_for_acc = get_account_booked_dates(acc_id, db=db_instance)
+                
                 if sched_dt is None:
                     is_expired = True
                 else:
                     naive_sched = sched_dt.replace(tzinfo=None) if sched_dt.tzinfo else sched_dt
-                    if naive_sched <= (now_sp + timedelta(minutes=25)):
+                    sched_date_str = naive_sched.strftime("%Y-%m-%d")
+                    # Se data já passou/muito próxima ou se esta conta já tem vídeo agendado neste dia
+                    if naive_sched <= (now_sp + timedelta(minutes=25)) or sched_date_str in booked_for_acc:
                         is_expired = True
 
                 if is_expired:
-                    db_instance = getattr(self, "_db", None) or getattr(self._account_mgr, "_db", None)
                     sched_dt, new_sched_str = calculate_next_daily_slot(
                         account_id=acc_id,
                         db=db_instance,
