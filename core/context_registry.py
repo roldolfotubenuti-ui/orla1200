@@ -133,6 +133,37 @@ class ContextRegistry:
 
             await context.add_cookies(valid_pw_cookies)
 
+        # 4b. Permanently disable blocking Joyride tutorial overlays globally
+        await context.add_init_script("""
+            const disableOverlays = () => {
+                const styleId = '__tks_anti_overlay_style__';
+                if (!document.getElementById(styleId)) {
+                    const style = document.createElement('style');
+                    style.id = styleId;
+                    style.innerHTML = `
+                        #react-joyride-portal,
+                        .react-joyride__overlay,
+                        .react-joyride__tooltip,
+                        div[data-test-id="overlay"],
+                        div[class*="react-joyride"] {
+                            display: none !important;
+                            pointer-events: none !important;
+                            visibility: hidden !important;
+                            width: 0 !important;
+                            height: 0 !important;
+                        }
+                    `;
+                    (document.head || document.documentElement).appendChild(style);
+                }
+            };
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', disableOverlays);
+            } else {
+                disableOverlays();
+            }
+            setInterval(disableOverlays, 1000);
+        """)
+
         # 5. Create default page
         page = await context.new_page()
 

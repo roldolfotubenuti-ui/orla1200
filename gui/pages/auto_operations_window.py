@@ -581,13 +581,15 @@ class AutoOperationsMainWindow(QMainWindow):
             self._append_log_message("Modo Homologação ATIVADO: Playwright preencherá o formulário sem clicar em Agendar.")
 
     def _clear_old_history(self) -> None:
-        """Limpa registros de testes antigos (FAILED, SUPERSEDED) deixando a tabela limpa."""
+        """Limpa registros de testes antigos (FAILED, SUPERSEDED, UNKNOWN) e re-escaneia as pastas."""
         try:
             with self.db.get_connection() as conn:
-                cur = conn.execute("DELETE FROM jobs WHERE status IN ('SUPERSEDED', 'FAILED')")
+                cur = conn.execute("DELETE FROM jobs WHERE status IN ('SUPERSEDED', 'FAILED', 'UNKNOWN')")
                 conn.commit()
                 deleted = cur.rowcount
             self._append_log_message(f"🧹 Histórico antigo limpo ({deleted} registros de teste removidos).")
+            if self.watcher:
+                self.watcher.scan_all_folders()
             self._refresh_data()
         except Exception as e:
             self._append_log_message(f"Erro ao limpar histórico: {e}")

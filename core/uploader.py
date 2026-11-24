@@ -483,7 +483,10 @@ class Uploader:
       if task.schedule_time:
         schedule_info = f" (scheduled: {DateTimeUtils.format_for_display(task.schedule_time)})"
 
-      self._logger.success(f"Upload complete: {filename}{schedule_info}")
+      if hasattr(self._logger, "success"):
+        self._logger.success(f"Upload complete: {filename}{schedule_info}")
+      else:
+        self._logger.info(f"SUCCESS: Upload complete: {filename}{schedule_info}")
 
       return UploadResult(
         success=True,

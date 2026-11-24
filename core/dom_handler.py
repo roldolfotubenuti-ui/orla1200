@@ -55,15 +55,17 @@ class _Selectors:
   POST_BUTTON = 'button[data-e2e="post_video_button"]'
   POST_NOW_BUTTON = "//button[.//div[text()='Post now']]"
   POST_CONFIRMATION = (
-    "//div[contains(text(), 'Your video has been uploaded') or "
-    "contains(text(), 'Video published') or "
-    "contains(text(), 'Your video has been scheduled') or "
-    "contains(text(), 'Video scheduled') or "
-    "contains(text(), 'Vídeo programado') or "
-    "contains(text(), 'Seu vídeo foi programado') or "
-    "contains(text(), 'Vídeo publicado') or "
-    "contains(text(), 'Gerenciar publicações') or "
-    "contains(text(), 'Manage your posts')]"
+    "//*[contains(., 'Your video has been uploaded') or "
+    "contains(., 'Video published') or "
+    "contains(., 'Your video has been scheduled') or "
+    "contains(., 'Video scheduled') or "
+    "contains(., 'Vídeo programado') or "
+    "contains(., 'Seu vídeo foi programado') or "
+    "contains(., 'Vídeo publicado') or "
+    "contains(., 'Gerenciar publicações') or "
+    "contains(., 'Manage your posts') or "
+    "contains(., 'Carregar outro vídeo') or "
+    "contains(., 'Upload another video')]"
   )
 
   # Popup / overlay selectors (from old working code)
@@ -145,6 +147,12 @@ class DOMHandler:
     self._page = page
     self._logger = logger
     self._datetime_utils = datetime_utils
+
+  def _log_success(self, msg: str) -> None:
+    if hasattr(self._logger, "success"):
+      self._logger.success(msg)
+    elif hasattr(self._logger, "info"):
+      self._logger.info(f"SUCCESS: {msg}")
 
   async def upload_file(self, file_path: Path) -> None:
     """
@@ -230,7 +238,7 @@ class DOMHandler:
         """)
 
         if result:
-          self._logger.success("File upload complete")
+          self._log_success("File upload complete")
           return True
 
       except Exception as e:
@@ -259,8 +267,8 @@ class DOMHandler:
     editor = self._page.locator(_Selectors.CAPTION_EDITOR).first
     await editor.wait_for(state="visible", timeout=10000)
 
-    # Click to focus
-    await editor.click()
+    # Click to focus with force=True to bypass any transparent overlays
+    await editor.click(force=True)
 
     # Pre-emptively clear any default filename or text TikTok auto-injected on upload
     await self._page.keyboard.press("Control+A")
@@ -284,7 +292,7 @@ class DOMHandler:
       if current_text != clean_text.strip():
         # Fallback to direct keyboard insert to avoid framework concatenation
         self._logger.debug("Editor content mismatched expected literal caption; enforcing keyboard insert")
-        await editor.click()
+        await editor.click(force=True)
         await self._page.keyboard.press("Control+A")
         await self._page.keyboard.press("Backspace")
         await self._page.keyboard.insert_text(clean_text)
@@ -297,7 +305,7 @@ class DOMHandler:
       # Explicit empty caption requested: ensure editor is completely clear
       current_text = (await editor.inner_text()).strip()
       if current_text:
-        await editor.click()
+        await editor.click(force=True)
         await self._page.keyboard.press("Control+A")
         await self._page.keyboard.press("Backspace")
       self._logger.debug("Caption set as empty (0 characters)")
@@ -422,8 +430,8 @@ class DOMHandler:
 
   async def set_time(self, hour: str, minute: str) -> None:
     """
-    Set the schedule time using the TikTok time picker.
-    Supports modern TimePicker wheel/columns and legacy listboxes.
+    Set the schedule time using Playwright native locator clicks on TikTok time picker.
+    Guarantees React state commit by clicking outside on the container (no Escape key rollback).
     """
     hour_str = str(hour).zfill(2)
     rounded_minute = self._round_minute(int(minute))
@@ -434,76 +442,64 @@ class DOMHandler:
     await self.dismiss_all_popups()
 
     _, time_trigger = await self._get_schedule_inputs()
-    if not time_trigger:
+    if not time_trigger or await time_trigger.count() == 0:
+      time_trigger = self._page.locator('div[role="combobox"][aria-label="Select time"], div[role="combobox"][aria-label*="time" i], .scheduled-picker .Picker__root:nth-of-type(2) .Picker__trigger').first
+
+    if not time_trigger or await time_trigger.count() == 0:
       self._logger.warning("Time trigger/input not found")
       return
 
+    # Open TimePicker dropdown
     await time_trigger.click(force=True)
     await asyncio.sleep(0.5)
 
-    # Click hour and minute directly via resilient DOM evaluation
-    clicked = await self._page.evaluate(
-      """
-      ([targetHour, targetMin]) => {
-        // Modern TikTok Studio TimePicker
-        const hourCol = document.querySelector('[role="listbox"][aria-label="Hours"], .TimePicker__column:first-child');
-        const minCol = document.querySelector('[role="listbox"][aria-label="Minutes"], .TimePicker__column:last-child');
-        
-        let hourClicked = false;
-        let minClicked = false;
+    # Click Hour and Minute using Playwright native locator clicks
+    h_clicked = False
+    m_clicked = False
+    try:
+      h_btn = self._page.locator(f'button.TimePicker__item[aria-label="Hours {hour_str}"], .TimePicker__column:first-child button:has-text("{hour_str}")').first
+      if await h_btn.count() > 0:
+        await h_btn.click(force=True)
+        h_clicked = True
+        await asyncio.sleep(0.3)
 
-        if (hourCol) {
-          const hBtn = hourCol.querySelector(`button[aria-label="Hours ${targetHour}"]`) ||
-                       [...hourCol.querySelectorAll('button, div, span')].find(b => b.textContent.trim() === targetHour);
-          if (hBtn) {
-            hBtn.click();
-            hourClicked = true;
-          }
-        }
+      m_btn = self._page.locator(f'button.TimePicker__item[aria-label="Minutes {rounded_minute}"], .TimePicker__column:last-child button:has-text("{rounded_minute}")').first
+      if await m_btn.count() > 0:
+        await m_btn.click(force=True)
+        m_clicked = True
+        await asyncio.sleep(0.3)
+    except Exception as e:
+      self._logger.debug(f"Native time button click error: {e}")
 
-        if (minCol) {
-          const mBtn = minCol.querySelector(`button[aria-label="Minutes ${targetMin}"]`) ||
-                       [...minCol.querySelectorAll('button, div, span')].find(b => b.textContent.trim() === targetMin);
-          if (mBtn) {
-            mBtn.click();
-            minClicked = true;
-          }
-        }
-
-        if (hourClicked && minClicked) return true;
-
-        // Legacy listbox fallback
-        const lists = [...document.querySelectorAll('div[class*="timepicker-option-list"], div[class*="option-list"], ul')];
-        if (lists.length >= 2) {
-          const hourOptions = [...lists[0].querySelectorAll('div, span, li')].filter(el => el.innerText && el.innerText.trim() === targetHour);
-          if (hourOptions.length > 0) hourOptions[0].click();
-          
-          const minOptions = [...lists[1].querySelectorAll('div, span, li')].filter(el => el.innerText && el.innerText.trim() === targetMin);
-          if (minOptions.length > 0) minOptions[0].click();
-          return true;
-        }
-        
-        return false;
-      }
-      """,
-      [hour_str, rounded_minute],
-    )
-
-    if not clicked:
+    # Fallback via DOM evaluation if native button click didn't execute
+    if not h_clicked or not m_clicked:
       try:
-        timepicker_lists = self._page.locator(_Selectors.TIMEPICKER_LIST)
-        if await timepicker_lists.count() >= 2:
-          await self._click_option_in_list(timepicker_lists.nth(0), hour_str)
-          await asyncio.sleep(0.3)
-          await self._click_option_in_list(timepicker_lists.nth(1), rounded_minute)
+        await self._page.evaluate(
+          """
+          ([targetHour, targetMin]) => {
+            const hBtn = document.querySelector(`button.TimePicker__item[aria-label="Hours ${targetHour}"]`);
+            const mBtn = document.querySelector(`button.TimePicker__item[aria-label="Minutes ${targetMin}"]`);
+            if (hBtn) hBtn.click();
+            if (mBtn) mBtn.click();
+          }
+          """,
+          [hour_str, rounded_minute],
+        )
       except Exception:
         pass
 
-    # Close timepicker dropdown cleanly
-    await self._page.keyboard.press("Escape")
-    await asyncio.sleep(0.3)
+    # Commit time selection by clicking outside (CRITICAL: Do NOT press Escape as Escape cancels the selection)
+    try:
+      commit_target = self._page.locator('.scheduled-title-container, .scheduled-container, div[class*="scheduled-title"]').first
+      if await commit_target.count() > 0:
+        await commit_target.click(force=True)
+      else:
+        await self._page.mouse.click(10, 10)
+    except Exception:
+      pass
 
-    self._logger.debug(f"Time set to {hour_str}:{rounded_minute}")
+    await asyncio.sleep(0.5)
+    self._logger.debug(f"Time set to {hour_str}:{rounded_minute} (committed without Escape)")
 
   async def set_date(self, day: int, month: int, year: int) -> None:
     """
@@ -522,52 +518,73 @@ class DOMHandler:
       self._logger.warning("Date trigger/input not found")
       return
 
-    await date_trigger.click(force=True)
-    await asyncio.sleep(0.5)
+    # Check if target date is already displayed in trigger
+    try:
+      curr_val = (await date_trigger.text_content() or await date_trigger.input_value() or "").strip()
+      if str(day) in curr_val and (str(year) in curr_val or target_month.lower() in curr_val.lower() or f"{month:02d}" in curr_val):
+        self._logger.info(f"Target date {day}/{month}/{year} is already displayed in trigger: '{curr_val}'")
+    except Exception:
+      pass
 
-    # Click day directly via resilient DOM evaluation inside open calendar
-    clicked_day = await self._page.evaluate(
-      """
-      ([targetDay]) => {
-        // Modern TikTok Studio DatePicker days
-        const modernDays = [...document.querySelectorAll('button.DatePicker__day')].filter(b => {
-          const txt = b.textContent.trim();
-          const disabled = b.getAttribute('data-disabled') === 'true' || b.disabled;
-          return txt === String(targetDay) && !disabled;
-        });
+    clicked_day = False
+    for attempt in range(3):
+      await date_trigger.click(force=True)
+      await asyncio.sleep(0.6)
 
-        if (modernDays.length > 0) {
-          modernDays[0].click();
-          return true;
+      # Click day directly via resilient DOM evaluation inside open calendar
+      clicked_day = await self._page.evaluate(
+        """
+        ([targetDay]) => {
+          // 1. Modern TikTok Studio DatePicker days
+          const modernDays = [...document.querySelectorAll('button.DatePicker__day, div[class*="DatePicker"] button, [role="gridcell"] button, [role="gridcell"]')].filter(b => {
+            const txt = b.textContent.trim();
+            const disabled = b.getAttribute('data-disabled') === 'true' || b.getAttribute('aria-disabled') === 'true' || b.disabled;
+            return txt === String(targetDay) && !disabled;
+          });
+
+          if (modernDays.length > 0) {
+            modernDays[0].click();
+            return true;
+          }
+
+          // 2. Candidate day elements fallback
+          const allCandidates = [...document.querySelectorAll('span, div, button, td, a')].filter(el => {
+            const txt = (el.innerText || el.textContent || '').trim();
+            if (txt !== String(targetDay)) return false;
+            if (el.offsetParent === null && el.clientHeight === 0 && el.clientWidth === 0) return false;
+            const cls = (el.className || '').toString().toLowerCase();
+            if (cls.includes('disabled') || cls.includes('prev-month') || cls.includes('next-month') || cls.includes('outside')) return false;
+            if (el.children.length > 1) return false;
+            return true;
+          });
+
+          if (allCandidates.length > 0) {
+            const best = allCandidates.find(el => {
+              const p = el.closest('div[class*="calendar"], div[class*="picker"], div[class*="popper"], div[data-floating-ui-portal], table');
+              return p !== null;
+            }) || allCandidates[allCandidates.length - 1];
+            best.click();
+            return true;
+          }
+          return false;
         }
+        """,
+        [day],
+      )
 
-        // Candidate day elements fallback
-        const allCandidates = [...document.querySelectorAll('span, div, button, td, a')].filter(el => {
-          const txt = (el.innerText || el.textContent || '').trim();
-          if (txt !== String(targetDay)) return false;
-          if (el.offsetParent === null && el.clientHeight === 0 && el.clientWidth === 0) return false;
-          const cls = (el.className || '').toString().toLowerCase();
-          if (cls.includes('disabled') || cls.includes('prev-month') || cls.includes('next-month')) return false;
-          if (el.children.length > 1) return false;
-          return true;
-        });
+      if clicked_day:
+        break
+      await asyncio.sleep(0.5)
 
-        if (allCandidates.length > 0) {
-          const best = allCandidates.find(el => {
-            const p = el.closest('div[class*="calendar"], div[class*="picker"], div[class*="popper"], div[data-floating-ui-portal], table');
-            return p !== null;
-          }) || allCandidates[allCandidates.length - 1];
-          best.click();
-          return true;
-        }
-        return false;
-      }
-      """,
-      [day],
-    )
-
-    # Close calendar
-    await self._page.keyboard.press("Escape")
+    # Close calendar with a soft outside click
+    try:
+      commit_target = self._page.locator('.scheduled-title-container, .scheduled-container, div[class*="scheduled-title"]').first
+      if await commit_target.count() > 0:
+        await commit_target.click(force=True)
+      else:
+        await self._page.mouse.click(10, 10)
+    except Exception:
+      pass
     await asyncio.sleep(0.3)
     self._logger.debug(f"Date set to {target_month} {day}, {year} (clicked={clicked_day})")
 
@@ -647,7 +664,7 @@ class DOMHandler:
       r_low = result.lower()
       no_issue = r_low.startswith("no issues") or "nenhum problema" in r_low or "sem problemas" in r_low
       if no_issue:
-        self._logger.success(f"Music copyright: {result}")
+        self._log_success(f"Music copyright: {result}")
       else:
         self._logger.warning(f"Music copyright issue: {result}")
 
@@ -675,6 +692,10 @@ class DOMHandler:
           return False
       if not await btn.is_visible():
         return False
+      try:
+        await btn.scroll_into_view_if_needed(timeout=1000)
+      except Exception:
+        pass
       if not await btn.is_enabled():
         return False
 
@@ -694,7 +715,7 @@ class DOMHandler:
       self._logger.debug(f"Error checking if post button is enabled: {e}")
       return False
 
-  async def check_content_quality(self, max_wait_seconds: int = 45) -> dict:
+  async def check_content_quality(self, max_wait_seconds: int = 90) -> dict:
     """
     Check the content quality status with dynamic polling up to 45 seconds.
 
@@ -1137,15 +1158,24 @@ class DOMHandler:
       'div[class*="TUXModal"]',
       'div[class*="modal"]',
       'div[role="dialog"]',
+      'div[class*="dialog"]',
+      'div[class*="notification"]',
     ]
     modal_button_texts = [
-      "Post anyway",
-      "Schedule anyway",
-      "Publicar mesmo assim",
       "Agendar mesmo assim",
-      "Post now",
+      "Publicar mesmo assim",
+      "Schedule anyway",
+      "Post anyway",
       "Publicar agora",
+      "Post now",
+      "Agendar",
+      "Schedule",
+      "Continuar",
       "Continue",
+      "Confirmar",
+      "Confirm",
+      "Sim",
+      "Yes",
     ]
 
     for container_sel in modal_containers:
@@ -1220,7 +1250,7 @@ class DOMHandler:
         """)
         if toast_text:
           if success_toast_pattern.search(toast_text):
-            self._logger.success(f"Post confirmed via Toast: {toast_text}")
+            self._log_success(f"Post confirmed via Toast: {toast_text}")
             return True
           if rate_limit_pattern.search(toast_text):
             self._logger.error(f"Rate limit Toast detected: {toast_text}")
@@ -1232,46 +1262,76 @@ class DOMHandler:
       except Exception:
         pass
 
-      # Check 1: URL redirected to /content (most reliable)
+      # Check 1: URL redirected to /content or /manage (most reliable)
       current_url = self._page.url.rstrip("/")
-      if current_url.endswith("/content"):
-        self._logger.success("Post submitted successfully (redirected to /content)")
+      if any(p in current_url for p in ("/content", "/manage", "tiktokstudio/content")):
+        self._log_success(f"Post submitted successfully (redirected to {current_url})")
         return True
 
       # Check 2: explicit confirmation text appeared in DOM
       try:
         confirm = self._page.locator(_Selectors.POST_CONFIRMATION)
-        if await confirm.count() > 0:
-          self._logger.success("Post submitted successfully")
+        if await confirm.count() > 0 and await confirm.first.is_visible():
+          confirm_text = (await confirm.first.text_content() or "").strip()
+          self._log_success(f"Post submitted successfully (confirmed: '{confirm_text[:60]}')")
           return True
       except Exception:
         pass
 
-      # Check 3: modal warning check & at most one re-submit (must still wait for confirmation)
-      if not modal_resubmitted:
-        try:
-          _JS_GET_MODAL_WARNING = """
-            () => {
-              const modal_warning = document.querySelector('div[class*="common-modal-close-icon"]');
-              if (modal_warning) {
-                modal_warning.click();
-                return true;
-              }
-              return false;
+      # Check 2b: Success modal in modern TikTok Studio DOM
+      try:
+        success_dom = await self._page.evaluate("""
+          () => {
+            const texts = ['vídeo programado', 'seu vídeo foi programado', 'video scheduled', 'your video has been scheduled', 'gerenciar publicações', 'manage your posts', 'carregar outro vídeo', 'upload another video'];
+            const allElements = document.querySelectorAll('h1, h2, h3, h4, div[class*="title"], div[class*="success"], div[role="dialog"]');
+            for (const el of allElements) {
+              const t = (el.textContent || '').toLowerCase();
+              if (texts.some(txt => t.includes(txt))) return el.textContent.trim();
             }
-          """
-          self._logger.debug("Checking warning modal...")
-          is_modal = await self._page.evaluate(_JS_GET_MODAL_WARNING)
-          if is_modal:
-            modal_resubmitted = True
-            self._logger.info("Found and closed warning modal — re-submitting post button and awaiting confirmation...")
-            await asyncio.sleep(0.5)
-            await self.click_post()
-        except Exception:
-          pass
+            return null;
+          }
+        """)
+        if success_dom:
+          self._log_success(f"Post submitted successfully (DOM success: '{success_dom[:60]}')")
+          return True
+      except Exception:
+        pass
+
+      # Check 3: Active confirmation of any blocking prompt modals (e.g. "Agendar mesmo assim", "Publicar mesmo assim")
+      try:
+        await self.handle_post_confirmation_modal()
+      except Exception as e:
+        self._logger.debug(f"Confirmation modal handling probe: {e}")
+
+      # Check 4: If upload form disappeared and post button is gone with no error toast
+      try:
+        form_gone = await self._page.evaluate("""
+          () => {
+            const hasCaption = !!document.querySelector('div[contenteditable="true"]');
+            const hasPostBtn = !!document.querySelector('button[data-e2e="post_video_button"]');
+            const hasError = !!document.querySelector('div[class*="Toast-content"], div[class*="error"]');
+            return !hasCaption && !hasPostBtn && !hasError;
+          }
+        """)
+        if form_gone and elapsed >= 10:
+          self._log_success("Post submitted successfully (upload form exited without errors)")
+          return True
+      except Exception:
+        pass
 
       await asyncio.sleep(poll_interval)
       elapsed += poll_interval
+
+    # Save diagnostic screenshot on timeout
+    try:
+      from pathlib import Path
+      ss_dir = Path("logs/screenshots")
+      ss_dir.mkdir(parents=True, exist_ok=True)
+      ss_path = ss_dir / f"timeout_confirm_{int(time.time())}.png"
+      await self._page.screenshot(path=str(ss_path))
+      self._logger.warning(f"Screenshot on confirmation timeout saved to: {ss_path}")
+    except Exception:
+      pass
 
     self._logger.error(f"Post confirmation timed out after {timeout}s")
     return False
@@ -1504,8 +1564,8 @@ class DOMHandler:
           }
 
           // Fallback to inputs
+          const inputs = Array.from(document.querySelectorAll("input[class*='TUXTextInputCore-input'], div[class*='schedule'] input"));
           if (!timeVal || !dateVal) {
-            const inputs = Array.from(document.querySelectorAll("input[class*='TUXTextInputCore-input'], div[class*='schedule'] input"));
             for (const inp of inputs) {
               const v = (inp.value || "").trim();
               if (v.includes(":") && !timeVal) timeVal = v;
