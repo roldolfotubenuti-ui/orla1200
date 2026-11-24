@@ -303,40 +303,51 @@ class Uploader:
         # CRITICAL: Always set DATE first so tomorrow's date is established,
         # otherwise setting time first for today (in the past) gets rejected by TikTok!
         day, month, year = DateTimeUtils.parse_day_month_year(task.schedule_time)
-        t_date_start = time.monotonic()
-        await self._dom_handler.set_date(day, month, year)
-        t_date = time.monotonic() - t_date_start
-
         hour, minute = DateTimeUtils.parse_hour_minute(task.schedule_time)
-        t_time_start = time.monotonic()
-        await self._dom_handler.set_time(hour, minute)
-        t_time = time.monotonic() - t_time_start
 
-        # Phase 2.5: Verify schedule inputs in DOM and detect validation errors
-        if hasattr(self._dom_handler, "verify_schedule_inputs"):
-          sched_verify = await self._dom_handler.verify_schedule_inputs(
-            expected_hour=hour,
-            expected_minute=minute,
-            expected_day=day,
-            expected_month_name=getattr(self._dom_handler, "MONTH_NAMES", {}).get(month, ""),
-          )
-          if not sched_verify.get("valid", True):
-            reason = sched_verify.get("reason", "Erro de agendamento no DOM do TikTok")
-            schedule_validation_err = True
-            schedule_rejection_reason = reason
-            self._logger.error(f"Schedule configuration failed in DOM: {reason}")
-            t_data = _build_telemetry()
-            _log_telemetry(t_data, "schedule_error")
-            return UploadResult(
-              success=False,
-              file_path=task.file_path,
-              message=f"Schedule validation failed in DOM: {reason}",
-              timestamp=datetime.now(),
-              error=reason,
-              cm=False,
-              qc="schedule_error",
-              telemetry=t_data,
+        sched_verify = {"valid": True}
+        for sched_attempt in range(2):
+          t_date_start = time.monotonic()
+          await self._dom_handler.set_date(day, month, year)
+          t_date = time.monotonic() - t_date_start
+
+          t_time_start = time.monotonic()
+          await self._dom_handler.set_time(hour, minute)
+          t_time = time.monotonic() - t_time_start
+
+          # Phase 2.5: Verify schedule inputs in DOM and detect validation errors
+          if hasattr(self._dom_handler, "verify_schedule_inputs"):
+            sched_verify = await self._dom_handler.verify_schedule_inputs(
+              expected_hour=hour,
+              expected_minute=minute,
+              expected_day=day,
+              expected_month_name=getattr(self._dom_handler, "MONTH_NAMES", {}).get(month, ""),
             )
+            if sched_verify.get("valid", True):
+              break
+            else:
+              self._logger.warning(
+                f"Schedule DOM mismatch on attempt {sched_attempt+1}: {sched_verify.get('reason')}. Retrying picker..."
+              )
+              await asyncio.sleep(1.0)
+
+        if not sched_verify.get("valid", True):
+          reason = sched_verify.get("reason", "Erro de agendamento no DOM do TikTok")
+          schedule_validation_err = True
+          schedule_rejection_reason = reason
+          self._logger.error(f"Schedule configuration failed in DOM: {reason}")
+          t_data = _build_telemetry()
+          _log_telemetry(t_data, "schedule_error")
+          return UploadResult(
+            success=False,
+            file_path=task.file_path,
+            message=f"Schedule validation failed in DOM: {reason}",
+            timestamp=datetime.now(),
+            error=reason,
+            cm=False,
+            qc="schedule_error",
+            telemetry=t_data,
+          )
 
       # Step 5: Set visibility
       await self._dom_handler.set_visibility(task.visibility)

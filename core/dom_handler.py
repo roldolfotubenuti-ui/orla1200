@@ -435,7 +435,8 @@ class DOMHandler:
     """
     hour_str = str(hour).zfill(2)
     rounded_minute = self._round_minute(int(minute))
-    self._logger.info(f"Setting time to {hour_str}:{rounded_minute}")
+    expected_time = f"{hour_str}:{rounded_minute}"
+    self._logger.info(f"Setting time to {expected_time}")
 
     # Ensure no blocking modal overlay intercepts pointer events
     await self.dismiss_allow_schedule()
@@ -449,62 +450,80 @@ class DOMHandler:
       self._logger.warning("Time trigger/input not found")
       return
 
-    # Open TimePicker dropdown
-    await time_trigger.click(force=True)
-    await asyncio.sleep(0.6)
+    for attempt in range(3):
+      # Open TimePicker dropdown
+      await time_trigger.click(force=True)
+      await asyncio.sleep(0.5)
 
-    # Click Hour and Minute using column-targeted DOM evaluation
-    clicked_result = await self._page.evaluate(
-      """
-      ([targetH, targetM]) => {
-        // Column 0: Hours
-        const hCols = document.querySelectorAll('.TimePicker__column[aria-label="Hours"], .TimePicker__column');
-        const hCol = hCols.length > 0 ? hCols[0] : null;
-        let hClicked = false;
-        if (hCol) {
-          const hBtns = Array.from(hCol.querySelectorAll('button.TimePicker__item, button'));
-          const hTarget = hBtns.find(b => b.innerText.trim() === String(targetH));
-          if (hTarget) {
-            hTarget.scrollIntoView({ block: 'center' });
-            hTarget.click();
-            hClicked = true;
+      # Click Hour and Minute using column-targeted DOM evaluation with scrollIntoView
+      clicked_result = await self._page.evaluate(
+        """
+        ([targetH, targetM]) => {
+          // Column 0: Hours
+          const hCols = document.querySelectorAll('.TimePicker__column[aria-label="Hours"], .TimePicker__column');
+          const hCol = hCols.length > 0 ? hCols[0] : null;
+          let hClicked = false;
+          if (hCol) {
+            const hBtns = Array.from(hCol.querySelectorAll('button.TimePicker__item, button'));
+            const hTarget = hBtns.find(b => {
+              const txt = b.innerText.trim();
+              const aria = b.getAttribute('aria-label') || '';
+              return txt === String(targetH) || txt === String(parseInt(targetH)) || aria === 'Hours ' + targetH || aria.endsWith(' ' + targetH);
+            });
+            if (hTarget) {
+              hTarget.scrollIntoView({ block: 'center' });
+              hTarget.click();
+              hClicked = true;
+            }
           }
-        }
 
-        // Column 1: Minutes
-        const mCols = document.querySelectorAll('.TimePicker__column[aria-label="Minutes"]');
-        const allCols = document.querySelectorAll('.TimePicker__column');
-        const mCol = mCols.length > 0 ? mCols[0] : (allCols.length > 1 ? allCols[1] : null);
-        let mClicked = false;
-        if (mCol) {
-          const mBtns = Array.from(mCol.querySelectorAll('button.TimePicker__item, button'));
-          const mTarget = mBtns.find(b => b.innerText.trim() === String(targetM));
-          if (mTarget) {
-            mTarget.scrollIntoView({ block: 'center' });
-            mTarget.click();
-            mClicked = true;
+          // Column 1: Minutes
+          const mCols = document.querySelectorAll('.TimePicker__column[aria-label="Minutes"]');
+          const allCols = document.querySelectorAll('.TimePicker__column');
+          const mCol = mCols.length > 0 ? mCols[0] : (allCols.length > 1 ? allCols[1] : null);
+          let mClicked = false;
+          if (mCol) {
+            const mBtns = Array.from(mCol.querySelectorAll('button.TimePicker__item, button'));
+            const mTarget = mBtns.find(b => {
+              const txt = b.innerText.trim();
+              const aria = b.getAttribute('aria-label') || '';
+              return txt === String(targetM) || txt === String(parseInt(targetM)) || aria === 'Minutes ' + targetM || aria.endsWith(' ' + targetM);
+            });
+            if (mTarget) {
+              mTarget.scrollIntoView({ block: 'center' });
+              mTarget.click();
+              mClicked = true;
+            }
           }
+
+          return { hClicked, mClicked };
         }
+        """,
+        [hour_str, rounded_minute],
+      )
 
-        return { hClicked, mClicked };
-      }
-      """,
-      [hour_str, rounded_minute],
-    )
+      self._logger.info(f"Time picker selection attempt {attempt+1}: {clicked_result}")
 
-    self._logger.info(f"Time picker selection result: {clicked_result}")
+      # Commit time selection by clicking outside (CRITICAL: Do NOT press Escape as Escape cancels the selection)
+      try:
+        commit_target = self._page.locator('.scheduled-title-container, .scheduled-container, div[class*="scheduled-title"]').first
+        if await commit_target.count() > 0:
+          await commit_target.click(force=True)
+        else:
+          await self._page.mouse.click(10, 10)
+      except Exception:
+        pass
 
-    # Commit time selection by clicking outside (CRITICAL: Do NOT press Escape as Escape cancels the selection)
-    try:
-      commit_target = self._page.locator('.scheduled-title-container, .scheduled-container, div[class*="scheduled-title"]').first
-      if await commit_target.count() > 0:
-        await commit_target.click(force=True)
-      else:
-        await self._page.mouse.click(10, 10)
-    except Exception:
-      pass
+      await asyncio.sleep(0.5)
 
-    await asyncio.sleep(0.5)
+      # Verify current value in trigger
+      try:
+        curr_val = (await time_trigger.locator(".Picker__value").text_content() or await time_trigger.text_content() or "").strip()
+        if expected_time in curr_val:
+          self._logger.info(f"Time verified in trigger: '{curr_val}'")
+          break
+      except Exception:
+        pass
     self._logger.debug(f"Time set to {hour_str}:{rounded_minute} (committed without Escape)")
 
   async def set_date(self, day: int, month: int, year: int) -> None:
@@ -1644,6 +1663,27 @@ class DOMHandler:
       return {
         "valid": False,
         "reason": "Campo de agendamento destacado em vermelho pelo TikTok Studio",
+        "time_val": time_val,
+        "date_val": date_val,
+      }
+
+    target_hh = str(expected_hour).zfill(2)
+    target_mm = self._round_minute(int(expected_minute))
+    expected_time_str = f"{target_hh}:{target_mm}"
+    if time_val and expected_time_str not in time_val:
+      self._logger.error(f"DOM schedule mismatch: picker shows '{time_val}', expected '{expected_time_str}'")
+      return {
+        "valid": False,
+        "reason": f"Horário no DOM ({time_val}) não corresponde ao programado ({expected_time_str})",
+        "time_val": time_val,
+        "date_val": date_val,
+      }
+
+    if date_val and str(expected_day) not in date_val:
+      self._logger.error(f"DOM date mismatch: picker shows '{date_val}', expected day {expected_day}")
+      return {
+        "valid": False,
+        "reason": f"Dia no DOM ({date_val}) não corresponde ao programado (dia {expected_day})",
         "time_val": time_val,
         "date_val": date_val,
       }
