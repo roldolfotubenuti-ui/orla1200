@@ -93,13 +93,20 @@ class Application:
     )
 
     # 7. Create Main Window
-    window = MainWindow(theme_manager=theme_manager)
+    from gui.pages.auto_operations_window import AutoOperationsMainWindow
 
-    # Apply window dimensions and center on screen
-    w, h = config.window_size
-    window.resize(w, h)
-    mw, mh = config.min_window_size
-    window.setMinimumSize(mw, mh)
+    if "--wizard" in sys.argv:
+      window = MainWindow(theme_manager=theme_manager)
+      w, h = config.window_size
+      window.resize(w, h)
+      mw, mh = config.min_window_size
+      window.setMinimumSize(mw, mh)
+      GUIController(window, config, project_root=user_data_dir)
+    else:
+      window = AutoOperationsMainWindow(theme_manager=theme_manager)
+      w, h = 1180, 780
+      window.resize(w, h)
+      window.setMinimumSize(960, 640)
 
     screen = app.primaryScreen()
     if screen:
@@ -107,9 +114,6 @@ class Application:
       cx = avail.x() + max(0, (avail.width() - w) // 2)
       cy = avail.y() + max(0, (avail.height() - h) // 2)
       window.move(cx, cy)
-
-    # 8. Create controller bound to user data repository
-    GUIController(window, config, project_root=user_data_dir)
 
     # 9. Show window
     window.show()

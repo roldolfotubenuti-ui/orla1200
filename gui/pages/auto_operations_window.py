@@ -1,0 +1,638 @@
+"""TKS Engine 3.0 — Interface Gráfica de Operações Automáticas (Auto Operations GUI).
+
+Exibe os 6 personagens/departamentos como ilustrações visuais e opera 100% no piloto
+automático: vigia E:\\ORLA1200\\1..6, alterna contas de acordo com os personagens,
+aplica legenda automática, agenda no TikTok Studio e confirma a publicação.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+import webbrowser
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QIcon, QTextCursor
+from PyQt6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from core.account_manager import AccountManager
+from core.browser_runtime import BrowserRuntime
+from core.db_manager import DatabaseManager
+from core.execution_coordinator import ExecutionCoordinator
+from core.local_folder_watcher import LocalFolderWatcher
+from core.office_event_bridge import OfficeEventBridge
+from core.queue_manager import JobRecord, JobStatus, QueueManager
+from core.round_robin_router import RoundRobinRouter
+from gui.theme.manager import ThemeManager
+
+# Mapeamento oficial dos 6 personagens e departamentos
+CHARACTERS_MAP = [
+    {
+        "id": "employee-01",
+        "dept_id": "dept_instagram",
+        "name": "Executivo Voxel",
+        "role": "Instagram",
+        "folder": "1",
+        "drawer": "drawer-01",
+        "account": "@unamyti",
+        "emoji": "🧑‍💼",
+        "color": "#E1306C",
+    },
+    {
+        "id": "employee-02",
+        "dept_id": "dept_mercadolivre",
+        "name": "Pequeno Lutador",
+        "role": "Mercado Livre",
+        "folder": "2",
+        "drawer": "drawer-02",
+        "account": "@valueini",
+        "emoji": "🥋",
+        "color": "#FFE600",
+    },
+    {
+        "id": "employee-03",
+        "dept_id": "dept_shorts",
+        "name": "Pato Executivo",
+        "role": "Shorts",
+        "folder": "3",
+        "drawer": "drawer-03",
+        "account": "@vinihack537",
+        "emoji": "🦆",
+        "color": "#FF0000",
+    },
+    {
+        "id": "employee-04",
+        "dept_id": "dept_tiktok",
+        "name": "Jogador Voxel",
+        "role": "TikTok",
+        "folder": "4",
+        "drawer": "drawer-04",
+        "account": "@vinihack979",
+        "emoji": "🏀",
+        "color": "#00F2FE",
+    },
+    {
+        "id": "employee-05",
+        "dept_id": "dept_tiktokshop",
+        "name": "Cientista Louco",
+        "role": "TikTok Shop",
+        "folder": "5",
+        "drawer": "drawer-05",
+        "account": "@vinihack120",
+        "emoji": "🔬",
+        "color": "#FE2C55",
+    },
+    {
+        "id": "employee-06",
+        "dept_id": "dept_youtube",
+        "name": "Cavaleiro Real",
+        "role": "YouTube",
+        "folder": "6",
+        "drawer": "drawer-06",
+        "account": "@viniciusferraz218",
+        "emoji": "🛡️",
+        "color": "#9C27B0",
+    },
+]
+
+
+class CharacterIllustrationCard(QFrame):
+    """Card ilustrativo de um personagem exibindo seu departamento, conta e status ao vivo."""
+
+    def __init__(self, data: dict[str, str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.data = data
+        self.dept_id = data["dept_id"]
+        self.account_username = data["account"]
+
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet("""
+            CharacterIllustrationCard {
+                background-color: #1A1D24;
+                border: 1px solid #2D323F;
+                border-radius: 10px;
+                padding: 10px;
+            }
+            CharacterIllustrationCard:hover {
+                border: 1px solid #3E4456;
+                background-color: #20242D;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
+
+        # Header com emoji/ilustração e nome
+        top_row = QHBoxLayout()
+        self.lbl_emoji = QLabel(data["emoji"])
+        self.lbl_emoji.setStyleSheet("font-size: 26px;")
+        top_row.addWidget(self.lbl_emoji)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        self.lbl_name = QLabel(f"Mesa {data['folder']} — {data['role']}")
+        self.lbl_name.setStyleSheet("font-size: 13px; font-weight: 800; color: #FFFFFF;")
+        self.lbl_char = QLabel(f"{data['name']} ({data['drawer']})")
+        self.lbl_char.setStyleSheet("font-size: 10px; color: #8F95A3;")
+        title_box.addWidget(self.lbl_name)
+        title_box.addWidget(self.lbl_char)
+        top_row.addLayout(title_box)
+        top_row.addStretch()
+
+        # Estrela de sucesso (inicialmente oculta)
+        self.lbl_star = QLabel("⭐")
+        self.lbl_star.setStyleSheet("font-size: 18px;")
+        self.lbl_star.setVisible(False)
+        top_row.addWidget(self.lbl_star)
+
+        layout.addLayout(top_row)
+
+        # Info de Conta e Pasta
+        info_row = QHBoxLayout()
+        self.lbl_account = QLabel(f"Conta: {data['account']}")
+        self.lbl_account.setStyleSheet(f"font-size: 11px; font-weight: 700; color: {data['color']};")
+        self.lbl_folder = QLabel(f"E:\\ORLA1200\\{data['folder']}")
+        self.lbl_folder.setStyleSheet("font-size: 10px; color: #6C7282; font-family: Consolas;")
+        info_row.addWidget(self.lbl_account)
+        info_row.addStretch()
+        info_row.addWidget(self.lbl_folder)
+        layout.addLayout(info_row)
+
+        # Barra de Status Atual
+        self.lbl_status = QLabel("Aguardando novo vídeo...")
+        self.lbl_status.setStyleSheet("""
+            background-color: #12141A;
+            color: #8F95A3;
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid #232732;
+        """)
+        layout.addWidget(self.lbl_status)
+
+    def set_status(self, text: str, state: str = "idle") -> None:
+        """Atualiza visualmente o status da ilustração do personagem."""
+        if state == "working":
+            self.lbl_status.setText(f"⏳ {text}")
+            self.lbl_status.setStyleSheet("""
+                background-color: #1E2D4A;
+                color: #64B5F6;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 6px 8px;
+                border-radius: 6px;
+                border: 1px solid #1976D2;
+            """)
+            self.lbl_star.setVisible(False)
+        elif state == "success":
+            self.lbl_status.setText(f"✅ {text}")
+            self.lbl_status.setStyleSheet("""
+                background-color: #1B382B;
+                color: #81C784;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 6px 8px;
+                border-radius: 6px;
+                border: 1px solid #388E3C;
+            """)
+            self.lbl_star.setVisible(True)
+        elif state == "failed":
+            self.lbl_status.setText(f"❌ {text}")
+            self.lbl_status.setStyleSheet("""
+                background-color: #381E24;
+                color: #E57373;
+                font-size: 11px;
+                font-weight: 700;
+                padding: 6px 8px;
+                border-radius: 6px;
+                border: 1px solid #D32F2F;
+            """)
+        else:
+            self.lbl_status.setText(text)
+            self.lbl_status.setStyleSheet("""
+                background-color: #12141A;
+                color: #8F95A3;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 6px 8px;
+                border-radius: 6px;
+                border: 1px solid #232732;
+            """)
+
+
+class AutoOperationsMainWindow(QMainWindow):
+    """Janela principal de automação autônoma do TKS Engine 3.0."""
+
+    log_signal = pyqtSignal(str)
+
+    def __init__(self, theme_manager: ThemeManager | None = None) -> None:
+        super().__init__()
+        self.setWindowTitle("TKS Engine 3.0 — Automação de Pastas e Agendamento Contínuo")
+        self.resize(1180, 780)
+        self.setMinimumSize(960, 640)
+
+        # Core subsystems
+        self.db = DatabaseManager.get_instance()
+        self.account_mgr = AccountManager()
+        self.queue_mgr = QueueManager(self.db)
+        self.router = RoundRobinRouter(self.queue_mgr, self.account_mgr)
+        self.bridge = OfficeEventBridge.get_instance()
+
+        self.runtime: BrowserRuntime | None = None
+        self.coordinator: ExecutionCoordinator | None = None
+        self.watcher: LocalFolderWatcher | None = None
+
+        self._character_cards: dict[str, CharacterIllustrationCard] = {}
+        self._is_real_publishing = True
+
+        self.log_signal.connect(self._append_log_message)
+
+        self._build_ui()
+        self._start_automation()
+
+        # Timer periódico para atualizar tabelas e estatísticas
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._refresh_data)
+        self.timer.start(2000)
+
+    def _build_ui(self) -> None:
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #0E1015;
+                color: #E2E8F0;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            }
+            QLabel {
+                color: #E2E8F0;
+            }
+            QTableWidget {
+                background-color: #16181F;
+                color: #E2E8F0;
+                border: 1px solid #2D323F;
+                border-radius: 8px;
+                gridline-color: #1F232D;
+                font-size: 12px;
+            }
+            QHeaderView::section {
+                background-color: #1A1D26;
+                color: #94A3B8;
+                font-weight: 700;
+                font-size: 11px;
+                border: none;
+                border-bottom: 1px solid #2D323F;
+                padding: 6px 10px;
+            }
+            QPushButton {
+                background-color: #1E222D;
+                color: #E2E8F0;
+                border: 1px solid #33394A;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-weight: 700;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #272C3A;
+                border: 1px solid #434B60;
+            }
+            QPushButton#primaryAction {
+                background-color: #FE2C55;
+                color: #FFFFFF;
+                border: none;
+            }
+            QPushButton#primaryAction:hover {
+                background-color: #E0264B;
+            }
+            QTextEdit {
+                background-color: #0A0C10;
+                color: #68D391;
+                font-family: Consolas, monospace;
+                font-size: 11px;
+                border: 1px solid #242834;
+                border-radius: 6px;
+                padding: 6px;
+            }
+        """)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(20, 16, 20, 16)
+        root_layout.setSpacing(14)
+
+        # Header Superior
+        header_row = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title = QLabel("TKS ENGINE 3.0 — AUTOMAÇÃO DE PASTAS & AGENDAMENTO")
+        title.setStyleSheet("font-size: 18px; font-weight: 900; color: #FFFFFF; letter-spacing: 0.5px;")
+        subtitle = QLabel("Operação automática contínua em E:\\ORLA1200\\1..6 • Alternância de contas por personagem • Legenda e horários inteligentes")
+        subtitle.setStyleSheet("font-size: 12px; color: #718096;")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        header_row.addLayout(title_box)
+        header_row.addStretch()
+
+        # Badges de Modo
+        self.badge_mode = QLabel("MODO REAL AUTORIZADO")
+        self.badge_mode.setStyleSheet("""
+            background-color: #381E24;
+            color: #FE2C55;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 6px 14px;
+            border-radius: 14px;
+            border: 1px solid #FE2C55;
+        """)
+        header_row.addWidget(self.badge_mode)
+
+        self.btn_web_office = QPushButton("🌐 Abrir Escritório 3D")
+        self.btn_web_office.clicked.connect(lambda: webbrowser.open("http://localhost:3005"))
+        header_row.addWidget(self.btn_web_office)
+
+        root_layout.addLayout(header_row)
+
+        # Seção das 6 Ilustrações dos Personagens (Grid 3x2)
+        grid_characters = QGridLayout()
+        grid_characters.setSpacing(12)
+
+        for i, char_data in enumerate(CHARACTERS_MAP):
+            card = CharacterIllustrationCard(char_data)
+            self._character_cards[char_data["dept_id"]] = card
+            row = i // 3
+            col = i % 3
+            grid_characters.addWidget(card, row, col)
+
+        root_layout.addLayout(grid_characters)
+
+        # Tabela de Vídeos / Fila de Agendamento
+        lbl_queue = QLabel("FILA DE PROCESSAMENTO & AGENDAMENTOS REAIS")
+        lbl_queue.setStyleSheet("font-size: 12px; font-weight: 800; color: #94A3B8; margin-top: 4px;")
+        root_layout.addWidget(lbl_queue)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels([
+            "Pasta",
+            "Arquivo de Vídeo",
+            "Personagem / Dept",
+            "Conta TikTok",
+            "Legenda",
+            "Data & Horário",
+            "Status",
+        ])
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setFixedHeight(170)
+        root_layout.addWidget(self.table)
+
+        # Console de Logs ao Vivo
+        lbl_console = QLabel("LOG OPERACIONAL EM TEMPO REAL")
+        lbl_console.setStyleSheet("font-size: 12px; font-weight: 800; color: #94A3B8;")
+        root_layout.addWidget(lbl_console)
+
+        self.log_console = QTextEdit()
+        self.log_console.setReadOnly(True)
+        self.log_console.setFixedHeight(140)
+        root_layout.addWidget(self.log_console)
+
+        # Barra de Controles Inferior
+        bottom_bar = QHBoxLayout()
+        self.btn_rescan = QPushButton("🔄 Forçar Varredura de Pastas")
+        self.btn_rescan.clicked.connect(self._force_rescan)
+        bottom_bar.addWidget(self.btn_rescan)
+
+        self.btn_toggle_mode = QPushButton("Alternar para Homologação (Simulado)")
+        self.btn_toggle_mode.clicked.connect(self._toggle_publishing_mode)
+        bottom_bar.addWidget(self.btn_toggle_mode)
+
+        bottom_bar.addStretch()
+
+        self.lbl_stats = QLabel("Concorrência: 0 / 2 | Agendamentos Confirmados: 0")
+        self.lbl_stats.setStyleSheet("font-size: 12px; font-weight: 700; color: #CBD5E1;")
+        bottom_bar.addWidget(self.lbl_stats)
+
+        root_layout.addLayout(bottom_bar)
+
+    def _start_automation(self) -> None:
+        """Inicializa os subsistemas e ativa o monitoramento em segundo plano."""
+        self._append_log_message("Iniciando TKS Engine 3.0 em modo automático...")
+
+        # Conectar eventos do bridge para atualizar os cards dos personagens
+        def bridge_listener(event: dict[str, Any]) -> None:
+            dept_id = event.get("department_id")
+            event_name = event.get("event")
+            status = event.get("status")
+
+            if dept_id and dept_id in self._character_cards:
+                card = self._character_cards[dept_id]
+                if event_name in ("video.upload_started", "account.execution_started"):
+                    card.set_status("Levantando da mesa / Upload em andamento...", "working")
+                elif event_name in ("video.scheduled", "task.completed"):
+                    card.set_status("Vídeo agendado no TikTok Studio! ⭐", "success")
+                elif event_name == "video.failed":
+                    card.set_status(f"Falha: {event.get('extra', {}).get('error', 'Erro')}", "failed")
+
+            # Atualizar log
+            msg = f"[{datetime.now().strftime('%H:%M:%S')}] {event_name}: {status or ''} ({dept_id or ''})"
+            self.log_signal.emit(msg)
+
+        self.bridge.subscribe(bridge_listener)
+
+        # Iniciar Watcher local em E:\ORLA1200
+        try:
+            self.watcher = LocalFolderWatcher(
+                base_dir=Path(r"E:\ORLA1200"),
+                db_manager=self.db,
+                queue_manager=self.queue_mgr,
+                bridge=self.bridge,
+            )
+            self.watcher.start()
+            self._append_log_message("LocalFolderWatcher ativo monitorando pastas E:\\ORLA1200\\1..6 continuamente.")
+        except Exception as e:
+            self._append_log_message(f"Erro ao iniciar LocalFolderWatcher: {e}")
+
+        # Iniciar BrowserRuntime e ExecutionCoordinator assincronamente
+        QTimer.singleShot(500, self._init_coordinator_async)
+
+    def _init_coordinator_async(self) -> None:
+        """Inicializa o BrowserRuntime e o ExecutionCoordinator."""
+        import threading
+
+        def run_loop() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            self.runtime = BrowserRuntime()
+            loop.run_until_complete(self.runtime.start(headless=True))
+
+            self.coordinator = ExecutionCoordinator(
+                browser_runtime=self.runtime,
+                queue_manager=self.queue_mgr,
+                account_manager=self.account_mgr,
+                router=self.router,
+                db_manager=self.db,
+                max_concurrent_jobs=2,
+                max_jobs_per_account=1,
+                allow_real_publishing=self._is_real_publishing,
+            )
+            self.coordinator.set_real_publishing(self._is_real_publishing, confirmed=True)
+            self.coordinator.start()
+
+            # Hook para mover arquivo para _PROCESSADOS quando SCHEDULED
+            def on_coord_event(ev: str, data: dict[str, Any]) -> None:
+                if ev == "job.completed":
+                    jid = data.get("job_id")
+                    st = data.get("status")
+                    if jid and st == JobStatus.SCHEDULED and self.watcher:
+                        self.watcher.archive_processed_video(jid)
+
+            self.coordinator.register_callback(on_coord_event)
+            self.log_signal.emit("ExecutionCoordinator ativo com concorrência máxima de 2 contas.")
+
+            # Loop infinito do coordinator
+            async def worker_loop() -> None:
+                while True:
+                    try:
+                        if self.coordinator and self.coordinator.is_running:
+                            await self.coordinator.step()
+                    except Exception as exc:
+                        self.log_signal.emit(f"Erro no loop do coordinator: {exc}")
+                    await asyncio.sleep(2.0)
+
+            loop.run_until_complete(worker_loop())
+
+        t = threading.Thread(target=run_loop, daemon=True)
+        t.start()
+
+    def _force_rescan(self) -> None:
+        """Dispara varredura forçada nas pastas."""
+        self._append_log_message("Varredura manual disparada nas pastas E:\\ORLA1200\\1..6...")
+        if self.watcher:
+            import threading
+            threading.Thread(target=self.watcher.scan_now, daemon=True).start()
+
+    def _toggle_publishing_mode(self) -> None:
+        """Alterna entre Modo Real e Homologação."""
+        self._is_real_publishing = not self._is_real_publishing
+        if self.coordinator:
+            self.coordinator.set_real_publishing(self._is_real_publishing, confirmed=True)
+
+        if self._is_real_publishing:
+            self.badge_mode.setText("MODO REAL AUTORIZADO")
+            self.badge_mode.setStyleSheet("""
+                background-color: #381E24;
+                color: #FE2C55;
+                font-size: 11px;
+                font-weight: 800;
+                padding: 6px 14px;
+                border-radius: 14px;
+                border: 1px solid #FE2C55;
+            """)
+            self.btn_toggle_mode.setText("Alternar para Homologação (Simulado)")
+            self._append_log_message("Modo Real ATIVADO: Publicações serão agendadas oficialmente no TikTok Studio.")
+        else:
+            self.badge_mode.setText("MODO HOMOLOGAÇÃO (SIMULAÇÃO)")
+            self.badge_mode.setStyleSheet("""
+                background-color: #1E2D4A;
+                color: #64B5F6;
+                font-size: 11px;
+                font-weight: 800;
+                padding: 6px 14px;
+                border-radius: 14px;
+                border: 1px solid #1976D2;
+            """)
+            self.btn_toggle_mode.setText("Alternar para Modo Real (Oficial)")
+            self._append_log_message("Modo Homologação ATIVADO: Playwright preencherá o formulário sem clicar em Agendar.")
+
+    def _refresh_data(self) -> None:
+        """Atualiza a tabela de tarefas e estatísticas do banco de dados."""
+        try:
+            with self.db.get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT id, filename, department_id, account_id, caption, schedule_time, status
+                    FROM jobs
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                """)
+                rows = cursor.fetchall()
+
+                self.table.setRowCount(len(rows))
+                scheduled_count = 0
+
+                for r_idx, row in enumerate(rows):
+                    fname = str(row["filename"] or "")
+                    dept_id = str(row["department_id"] or "")
+                    acc_id = str(row["account_id"] or "")
+                    caption = str(row["caption"] or "ABSURDO")
+                    sched_time = str(row["schedule_time"] or "")
+                    status = str(row["status"] or "")
+
+                    if status == "SCHEDULED":
+                        scheduled_count += 1
+
+                    # Mapear pasta e personagem
+                    char_info = next((c for c in CHARACTERS_MAP if c["dept_id"] == dept_id), None)
+                    folder_str = char_info["folder"] if char_info else "-"
+                    dept_str = f"{char_info['emoji']} {char_info['role']}" if char_info else dept_id
+                    acc_str = char_info["account"] if char_info else acc_id
+
+                    self.table.setItem(r_idx, 0, QTableWidgetItem(f"Pasta {folder_str}"))
+                    self.table.setItem(r_idx, 1, QTableWidgetItem(fname))
+                    self.table.setItem(r_idx, 2, QTableWidgetItem(dept_str))
+                    self.table.setItem(r_idx, 3, QTableWidgetItem(acc_str))
+                    self.table.setItem(r_idx, 4, QTableWidgetItem(caption))
+                    self.table.setItem(r_idx, 5, QTableWidgetItem(sched_time))
+
+                    st_item = QTableWidgetItem(status)
+                    if status == "SCHEDULED":
+                        st_item.setForeground(QColor("#81C784"))
+                    elif status in ("RUNNING", "UPLOADING", "PROCESSING", "SUBMITTING"):
+                        st_item.setForeground(QColor("#64B5F6"))
+                    elif status == "FAILED":
+                        st_item.setForeground(QColor("#E57373"))
+                    self.table.setItem(r_idx, 6, st_item)
+
+                active_count = len([r for r in rows if r["status"] in ("RUNNING", "UPLOADING", "PROCESSING", "SUBMITTING")])
+                self.lbl_stats.setText(f"Concorrência: {active_count} / 2 | Agendamentos Confirmados: {scheduled_count}")
+
+        except Exception as e:
+            pass
+
+    def _append_log_message(self, text: str) -> None:
+        """Adiciona mensagem no console de logs com auto-scroll."""
+        self.log_console.append(text)
+        self.log_console.moveCursor(QTextCursor.MoveOperation.End)
+
+    def closeEvent(self, event: Any) -> None:
+        """Encerra graciosamente o runtime e watcher."""
+        if self.watcher:
+            self.watcher.stop()
+        if self.coordinator:
+            self.coordinator.stop()
+        event.accept()
