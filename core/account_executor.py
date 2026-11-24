@@ -237,21 +237,22 @@ class AccountExecutor:
                 else:
                     sched_dt = None
 
-                # Regra Inteligente de Agendamento Diário:
-                # Se o horário já passou hoje (ou faltam menos de 25 min), ou se já há outro vídeo agendado para esta data nesta conta,
-                # o motor avança automaticamente para o próximo dia consecutivo às 18:00
+                # Regra Inteligente de Agendamento Oficial (Máx 5 por dia nos horários de Brasília):
+                # Se o horário já passou (ou faltam menos de 25 min), ou se já há outro vídeo agendado para este slot,
+                # o motor avança automaticamente para o próximo slot disponível na grade semanal
                 now_sp = datetime.now()
                 is_expired = False
                 db_instance = getattr(self, "_db", None) or getattr(self._account_mgr, "_db", None) or DatabaseManager.get_instance()
-                booked_for_acc = get_account_booked_dates(acc_id, db=db_instance)
+                from core.daily_scheduler_rule import get_account_booked_slots
+                booked_slots = get_account_booked_slots(acc_id, db=db_instance, exclude_job_id=job.id)
                 
                 if sched_dt is None:
                     is_expired = True
                 else:
                     naive_sched = sched_dt.replace(tzinfo=None) if sched_dt.tzinfo else sched_dt
-                    sched_date_str = naive_sched.strftime("%Y-%m-%d")
-                    # Se data já passou/muito próxima ou se esta conta já tem vídeo agendado neste dia
-                    if naive_sched <= (now_sp + timedelta(minutes=25)) or sched_date_str in booked_for_acc:
+                    slot_key = naive_sched.strftime("%Y-%m-%d %H:%M")
+                    # Se data/horário já passou/muito próximo ou se este slot já está ocupado por outro vídeo
+                    if naive_sched <= (now_sp + timedelta(minutes=25)) or slot_key in booked_slots:
                         is_expired = True
 
                 if is_expired:

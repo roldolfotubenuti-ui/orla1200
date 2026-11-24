@@ -250,11 +250,13 @@ class LocalFolderWatcher:
             fpath = self.base_dir / str(i)
             if not fpath.exists():
                 continue
-            for item in fpath.iterdir():
-                if item.is_file() and item.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
-                    res = self.process_intake_file(item)
-                    if res:
-                        results.append(res)
+            items = [item for item in fpath.iterdir() if item.is_file() and item.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS]
+            # Ordenação consistente por data de modificação e nome
+            items.sort(key=lambda p: (p.stat().st_mtime, p.name))
+            for item in items:
+                res = self.process_intake_file(item)
+                if res:
+                    results.append(res)
         return results
 
     def on_file_detected(self, path: Path) -> None:
