@@ -28,7 +28,7 @@ logger = logging.getLogger("tks.daily_scheduler")
 
 DEFAULT_SCHEDULE_TIMEZONE = "America/Sao_Paulo"
 MAX_VIDEOS_PER_DAY = 5
-DEFAULT_CAPTION = "ABSURDO"
+DEFAULT_CAPTION = "meu brasil #fy #foryou"
 
 # Horários oficiais solicitados (fuso de Brasília)
 # 0 = Segunda, 1 = Terça, 2 = Quarta, 3 = Quinta, 4 = Sexta, 5 = Sábado, 6 = Domingo

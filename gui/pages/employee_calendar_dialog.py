@@ -399,7 +399,7 @@ class EmployeeCalendarDialog(QDialog):
                         "schedule_time": s_time,
                         "time_str": t_str,
                         "status": r["status"],
-                        "caption": r["caption"] or "ABSURDO",
+                        "caption": r["caption"] or "meu brasil #fy #foryou",
                     }
                     if d_str not in self.schedules_by_date:
                         self.schedules_by_date[d_str] = []

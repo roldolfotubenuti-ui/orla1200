@@ -679,7 +679,7 @@ class AutoOperationsMainWindow(QMainWindow):
                     fname = str(row["filename"] or "")
                     dept_id = str(row["department_id"] or "")
                     acc_id = str(row["account_id"] or "")
-                    caption = str(row["caption"] or "ABSURDO")
+                    caption = str(row["caption"] or "meu brasil #fy #foryou")
                     sched_time = str(row["schedule_time"] or "")
                     status = str(row["status"] or "")
                     created_at = str(row["created_at"] or "")

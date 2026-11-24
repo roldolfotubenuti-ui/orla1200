@@ -71,6 +71,7 @@ class Application:
 
     # 4. Set application icon
     ico_candidates = [
+      bundle_dir / "app_icon.ico",
       bundle_dir / "assets" / "tks_engine.ico",
       bundle_dir / "assets" / "icon.ico",
     ]
