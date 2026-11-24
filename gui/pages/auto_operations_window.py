@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QIcon, QTextCursor
+from PyQt6.QtGui import QColor, QCursor, QFont, QIcon, QTextCursor
 from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,

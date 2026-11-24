@@ -11,7 +11,9 @@ echo.
 netstat -ano | findstr ":3005" >nul
 if errorlevel 1 (
     echo [1/3] Iniciando TKS Virtual Office em segundo plano na porta 3005...
-    start /min "TKS Virtual Office 3D" cmd /c "cd /d \"E:\youtube\APPS CURSOR\TKS-Virtual-Office\" && npx.cmd next start -p 3005 -H 0.0.0.0"
+    pushd "E:\youtube\APPS CURSOR\TKS-Virtual-Office"
+    start /min "TKS Virtual Office 3D" cmd /c "npx.cmd next start -p 3005 -H 0.0.0.0"
+    popd
     timeout /t 3 /nobreak >nul
 ) else (
     echo [1/3] TKS Virtual Office 3D ja esta ativo na porta 3005.
