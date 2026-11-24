@@ -284,6 +284,8 @@ class AutoOperationsMainWindow(QMainWindow):
 
         self._character_cards: dict[str, CharacterIllustrationCard] = {}
         self._is_real_publishing = True
+        self._active_table_filter = "ALL"
+        self._table_filter_buttons: dict[str, QPushButton] = {}
 
         self.log_signal.connect(self._append_log_message)
 
@@ -423,18 +425,45 @@ class AutoOperationsMainWindow(QMainWindow):
 
         root_layout.addLayout(grid_characters)
 
-        # Tabela de Vídeos / Fila de Agendamento
-        lbl_queue = QLabel("FILA DE PROCESSAMENTO & AGENDAMENTOS REAIS")
-        lbl_queue.setStyleSheet("font-size: 13px; font-weight: 800; color: #CBD5E1; margin-top: 10px; margin-bottom: 2px;")
-        root_layout.addWidget(lbl_queue)
+        # Barra de Filtros e Tabela de Vídeos
+        queue_header_row = QHBoxLayout()
+        lbl_queue = QLabel("FILA DE PROCESSAMENTO & AGENDAMENTOS (VÍDEOS INDIVIDUAIS)")
+        lbl_queue.setStyleSheet("font-size: 13px; font-weight: 800; color: #CBD5E1;")
+        queue_header_row.addWidget(lbl_queue)
+        queue_header_row.addStretch()
+
+        filter_box = QHBoxLayout()
+        filter_box.setSpacing(4)
+        lbl_filt = QLabel("Filtrar por:")
+        lbl_filt.setStyleSheet("font-size: 11px; color: #8F95A3; margin-right: 4px;")
+        filter_box.addWidget(lbl_filt)
+
+        btn_all = QPushButton("Todas as Mesas")
+        btn_all.setFixedHeight(24)
+        btn_all.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        btn_all.clicked.connect(lambda: self._set_table_filter("ALL"))
+        self._table_filter_buttons["ALL"] = btn_all
+        filter_box.addWidget(btn_all)
+
+        for char_info in CHARACTERS_MAP:
+            f = char_info["folder"]
+            btn_f = QPushButton(f"Mesa {f}")
+            btn_f.setFixedHeight(24)
+            btn_f.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            btn_f.clicked.connect(lambda checked, fold=f: self._set_table_filter(fold))
+            self._table_filter_buttons[f] = btn_f
+            filter_box.addWidget(btn_f)
+
+        queue_header_row.addLayout(filter_box)
+        root_layout.addLayout(queue_header_row)
 
         self.table = QTableWidget()
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
-            "Pasta",
-            "Arquivo de Vídeo",
-            "Mesa TikTok",
-            "Entrada (Detectado)",
+            "# Item",
+            "Arquivo de Vídeo (Individual)",
+            "Mesa & Conta TikTok",
+            "Entrada",
             "Data Programada (TikTok)",
             "Legenda",
             "Status",
@@ -628,6 +657,11 @@ class AutoOperationsMainWindow(QMainWindow):
             self.btn_toggle_mode.setText("Alternar para Modo Real (Oficial)")
             self._append_log_message("Modo Homologação ATIVADO: Playwright preencherá o formulário sem clicar em Agendar.")
 
+    def _set_table_filter(self, filter_key: str) -> None:
+        """Filtra as tarefas exibidas na tabela por mesa/pasta."""
+        self._active_table_filter = str(filter_key)
+        self._refresh_data()
+
     def _clear_old_history(self) -> None:
         """Limpa registros de testes antigos (FAILED, SUPERSEDED, UNKNOWN) e re-escaneia as pastas."""
         try:
@@ -661,64 +695,136 @@ class AutoOperationsMainWindow(QMainWindow):
             return raw_dt
 
     def _refresh_data(self) -> None:
-        """Atualiza a tabela de tarefas e estatísticas do banco de dados."""
+        """Atualiza a tabela de tarefas e estatísticas do banco de dados com suporte a filtros por mesa."""
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.execute("""
                     SELECT id, filename, department_id, account_id, caption, schedule_time, status, created_at, error_message
                     FROM jobs
                     ORDER BY created_at DESC
-                    LIMIT 30
+                    LIMIT 40
                 """)
                 rows = cursor.fetchall()
 
-                self.table.setRowCount(len(rows))
+                # Contadores para os botões de filtro
+                counts = {"ALL": len(rows), "1": 0, "2": 0, "3": 0, "4": 0, "5": 0, "6": 0}
                 scheduled_count = 0
 
-                for r_idx, row in enumerate(rows):
-                    fname = str(row["filename"] or "")
+                legacy_dept_map = {
+                    "dept_instagram": "dept_tiktok_01",
+                    "dept_mercadolivre": "dept_tiktok_02",
+                    "dept_shorts": "dept_tiktok_03",
+                    "dept_tiktok": "dept_tiktok_04",
+                    "dept_tiktokshop": "dept_tiktok_05",
+                    "dept_youtube": "dept_tiktok_06",
+                }
+
+                parsed_jobs = []
+                for row in rows:
                     dept_id = str(row["department_id"] or "")
-                    acc_id = str(row["account_id"] or "")
-                    caption = str(row["caption"] or "meu brasil #fy #foryou")
-                    sched_time = str(row["schedule_time"] or "")
-                    status = str(row["status"] or "")
-                    created_at = str(row["created_at"] or "")
-                    err_msg = str(row["error_message"] or "")
-
-                    if status == "SCHEDULED":
-                        scheduled_count += 1
-
-                    # Mapear pasta e conta TikTok (com suporte retroativo)
-                    legacy_dept_map = {
-                        "dept_instagram": "dept_tiktok_01",
-                        "dept_mercadolivre": "dept_tiktok_02",
-                        "dept_shorts": "dept_tiktok_03",
-                        "dept_tiktok": "dept_tiktok_04",
-                        "dept_tiktokshop": "dept_tiktok_05",
-                        "dept_youtube": "dept_tiktok_06",
-                    }
                     normalized_dept = legacy_dept_map.get(dept_id, dept_id)
                     char_info = next((c for c in CHARACTERS_MAP if c["dept_id"] == normalized_dept), None)
                     folder_str = char_info["folder"] if char_info else "-"
-                    char_name = char_info["role"] if char_info else dept_id
+
+                    if folder_str in counts:
+                        counts[folder_str] += 1
+
+                    status = str(row["status"] or "")
+                    if status in ("SCHEDULED", "ARCHIVED"):
+                        scheduled_count += 1
+
+                    parsed_jobs.append({
+                        "row": row,
+                        "folder": folder_str,
+                        "char_info": char_info,
+                        "status": status,
+                    })
+
+                # Atualizar botões de filtro (contagem e estilo ativo)
+                for key, btn in self._table_filter_buttons.items():
+                    is_active = (key == self._active_table_filter)
+                    if key == "ALL":
+                        btn.setText(f"Todas as Mesas ({counts['ALL']})")
+                    else:
+                        btn.setText(f"Mesa {key} ({counts.get(key, 0)})")
+
+                    if is_active:
+                        btn.setStyleSheet("""
+                            background-color: #2563EB;
+                            color: #FFFFFF;
+                            font-size: 11px;
+                            font-weight: 800;
+                            border: 1px solid #3B82F6;
+                            border-radius: 4px;
+                            padding: 2px 10px;
+                        """)
+                    else:
+                        btn.setStyleSheet("""
+                            background-color: #1E293B;
+                            color: #94A3B8;
+                            font-size: 11px;
+                            font-weight: 600;
+                            border: 1px solid #334155;
+                            border-radius: 4px;
+                            padding: 2px 10px;
+                        """)
+
+                # Filtrar linhas se houver filtro selecionado
+                filtered_jobs = [
+                    pj for pj in parsed_jobs
+                    if self._active_table_filter == "ALL" or pj["folder"] == self._active_table_filter
+                ]
+
+                self.table.setRowCount(len(filtered_jobs))
+
+                for r_idx, job in enumerate(filtered_jobs):
+                    row = job["row"]
+                    char_info = job["char_info"]
+                    folder_str = job["folder"]
+                    status = job["status"]
+
+                    fname = str(row["filename"] or "")
+                    acc_id = str(row["account_id"] or "")
+                    caption = str(row["caption"] or "meu brasil #fy #foryou")
+                    sched_time = str(row["schedule_time"] or "")
+                    created_at = str(row["created_at"] or "")
+                    err_msg = str(row["error_message"] or "")
+
+                    char_name = char_info["role"] if char_info else str(row["department_id"] or "")
                     acc_str = char_info["account"] if char_info else acc_id
                     emoji = char_info["emoji"] if char_info else "📱"
-
                     created_str = self._format_relative_time(created_at)
 
-                    self.table.setItem(r_idx, 0, QTableWidgetItem(f"Pasta {folder_str}"))
-                    self.table.setItem(r_idx, 1, QTableWidgetItem(fname))
-                    self.table.setItem(r_idx, 2, QTableWidgetItem(f"{emoji} {char_name} ({acc_str})"))
-                    
-                    # Horário de entrada claro (Hoje/Ontem)
+                    # Col 0: # Item sequencial
+                    it_num = QTableWidgetItem(f"#{r_idx + 1:02d}")
+                    it_num.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    it_num.setForeground(QColor("#94A3B8"))
+                    self.table.setItem(r_idx, 0, it_num)
+
+                    # Col 1: Arquivo de Vídeo Individual com destaque
+                    it_file = QTableWidgetItem(f"🎬 {fname}")
+                    it_file.setForeground(QColor("#F8FAFC"))
+                    self.table.setItem(r_idx, 1, it_file)
+
+                    # Col 2: Mesa & Conta TikTok
+                    it_mesa = QTableWidgetItem(f"{emoji} Mesa {folder_str} • {acc_str}")
+                    it_mesa.setForeground(QColor("#CBD5E1"))
+                    self.table.setItem(r_idx, 2, it_mesa)
+
+                    # Col 3: Entrada
                     self.table.setItem(r_idx, 3, QTableWidgetItem(created_str))
-                    
-                    # Data programada no TikTok
-                    self.table.setItem(r_idx, 4, QTableWidgetItem(sched_time))
+
+                    # Col 4: Data Programada no TikTok
+                    it_sched = QTableWidgetItem(sched_time)
+                    it_sched.setForeground(QColor("#38BDF8"))
+                    self.table.setItem(r_idx, 4, it_sched)
+
+                    # Col 5: Legenda
                     self.table.setItem(r_idx, 5, QTableWidgetItem(caption))
 
+                    # Col 6: Status com cores
                     st_item = QTableWidgetItem(status)
-                    if status == "SCHEDULED":
+                    if status in ("SCHEDULED", "ARCHIVED"):
                         st_item.setForeground(QColor("#81C784"))
                     elif status in ("RUNNING", "UPLOADING", "PROCESSING", "SUBMITTING"):
                         st_item.setForeground(QColor("#64B5F6"))
@@ -728,8 +834,8 @@ class AutoOperationsMainWindow(QMainWindow):
                         st_item.setForeground(QColor("#9E9E9E"))
                     self.table.setItem(r_idx, 6, st_item)
 
-                    # Detalhes / Erro
-                    detail_text = err_msg if err_msg else ("Agendamento Confirmado ✅" if status == "SCHEDULED" else "")
+                    # Col 7: Detalhes / Erro
+                    detail_text = err_msg if err_msg else ("Agendado com Sucesso ✅" if status in ("SCHEDULED", "ARCHIVED") else "")
                     self.table.setItem(r_idx, 7, QTableWidgetItem(detail_text))
 
                 active_count = len([r for r in rows if r["status"] in ("RUNNING", "UPLOADING", "PROCESSING", "SUBMITTING")])
