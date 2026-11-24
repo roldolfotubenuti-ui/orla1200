@@ -430,7 +430,7 @@ class DOMHandler:
 
   async def set_time(self, hour: str, minute: str) -> None:
     """
-    Set the schedule time using Playwright native locator clicks on TikTok time picker.
+    Set the schedule time using robust column selection on TikTok time picker.
     Guarantees React state commit by clicking outside on the container (no Escape key rollback).
     """
     hour_str = str(hour).zfill(2)
@@ -441,9 +441,9 @@ class DOMHandler:
     await self.dismiss_allow_schedule()
     await self.dismiss_all_popups()
 
-    _, time_trigger = await self._get_schedule_inputs()
-    if not time_trigger or await time_trigger.count() == 0:
-      time_trigger = self._page.locator('div[role="combobox"][aria-label="Select time"], div[role="combobox"][aria-label*="time" i], .scheduled-picker .Picker__root:nth-of-type(2) .Picker__trigger').first
+    time_trigger = self._page.locator('div[role="combobox"][aria-label="Select time"], div.scheduled-picker .Picker__root:nth-of-type(2) .Picker__trigger').first
+    if await time_trigger.count() == 0:
+      _, time_trigger = await self._get_schedule_inputs()
 
     if not time_trigger or await time_trigger.count() == 0:
       self._logger.warning("Time trigger/input not found")
@@ -451,42 +451,48 @@ class DOMHandler:
 
     # Open TimePicker dropdown
     await time_trigger.click(force=True)
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.6)
 
-    # Click Hour and Minute using Playwright native locator clicks
-    h_clicked = False
-    m_clicked = False
-    try:
-      h_btn = self._page.locator(f'button.TimePicker__item[aria-label="Hours {hour_str}"], .TimePicker__column:first-child button:has-text("{hour_str}")').first
-      if await h_btn.count() > 0:
-        await h_btn.click(force=True)
-        h_clicked = True
-        await asyncio.sleep(0.3)
-
-      m_btn = self._page.locator(f'button.TimePicker__item[aria-label="Minutes {rounded_minute}"], .TimePicker__column:last-child button:has-text("{rounded_minute}")').first
-      if await m_btn.count() > 0:
-        await m_btn.click(force=True)
-        m_clicked = True
-        await asyncio.sleep(0.3)
-    except Exception as e:
-      self._logger.debug(f"Native time button click error: {e}")
-
-    # Fallback via DOM evaluation if native button click didn't execute
-    if not h_clicked or not m_clicked:
-      try:
-        await self._page.evaluate(
-          """
-          ([targetHour, targetMin]) => {
-            const hBtn = document.querySelector(`button.TimePicker__item[aria-label="Hours ${targetHour}"]`);
-            const mBtn = document.querySelector(`button.TimePicker__item[aria-label="Minutes ${targetMin}"]`);
-            if (hBtn) hBtn.click();
-            if (mBtn) mBtn.click();
+    # Click Hour and Minute using column-targeted DOM evaluation
+    clicked_result = await self._page.evaluate(
+      """
+      ([targetH, targetM]) => {
+        // Column 0: Hours
+        const hCols = document.querySelectorAll('.TimePicker__column[aria-label="Hours"], .TimePicker__column');
+        const hCol = hCols.length > 0 ? hCols[0] : null;
+        let hClicked = false;
+        if (hCol) {
+          const hBtns = Array.from(hCol.querySelectorAll('button.TimePicker__item, button'));
+          const hTarget = hBtns.find(b => b.innerText.trim() === String(targetH));
+          if (hTarget) {
+            hTarget.scrollIntoView({ block: 'center' });
+            hTarget.click();
+            hClicked = true;
           }
-          """,
-          [hour_str, rounded_minute],
-        )
-      except Exception:
-        pass
+        }
+
+        // Column 1: Minutes
+        const mCols = document.querySelectorAll('.TimePicker__column[aria-label="Minutes"]');
+        const allCols = document.querySelectorAll('.TimePicker__column');
+        const mCol = mCols.length > 0 ? mCols[0] : (allCols.length > 1 ? allCols[1] : null);
+        let mClicked = false;
+        if (mCol) {
+          const mBtns = Array.from(mCol.querySelectorAll('button.TimePicker__item, button'));
+          const mTarget = mBtns.find(b => b.innerText.trim() === String(targetM));
+          if (mTarget) {
+            mTarget.scrollIntoView({ block: 'center' });
+            mTarget.click();
+            mClicked = true;
+          }
+        }
+
+        return { hClicked, mClicked };
+      }
+      """,
+      [hour_str, rounded_minute],
+    )
+
+    self._logger.info(f"Time picker selection result: {clicked_result}")
 
     # Commit time selection by clicking outside (CRITICAL: Do NOT press Escape as Escape cancels the selection)
     try:
@@ -513,16 +519,19 @@ class DOMHandler:
     await self.dismiss_allow_schedule()
     await self.dismiss_all_popups()
 
-    date_trigger, _ = await self._get_schedule_inputs()
-    if not date_trigger:
+    date_trigger = self._page.locator('div[role="combobox"][aria-label="Select date"], div.scheduled-picker .Picker__root:nth-of-type(1) .Picker__trigger').first
+    if await date_trigger.count() == 0:
+      date_trigger, _ = await self._get_schedule_inputs()
+
+    if not date_trigger or await date_trigger.count() == 0:
       self._logger.warning("Date trigger/input not found")
       return
 
     # Check if target date is already displayed in trigger
     try:
-      curr_val = (await date_trigger.text_content() or await date_trigger.input_value() or "").strip()
-      if str(day) in curr_val and (str(year) in curr_val or target_month.lower() in curr_val.lower() or f"{month:02d}" in curr_val):
-        self._logger.info(f"Target date {day}/{month}/{year} is already displayed in trigger: '{curr_val}'")
+      curr_val = (await date_trigger.locator(".Picker__value").text_content() or await date_trigger.text_content() or "").strip()
+      if str(day) in curr_val:
+        self._logger.info(f"Target day {day} is already displayed in trigger: '{curr_val}'")
     except Exception:
       pass
 
@@ -536,34 +545,28 @@ class DOMHandler:
         """
         ([targetDay]) => {
           // 1. Modern TikTok Studio DatePicker days
-          const modernDays = [...document.querySelectorAll('button.DatePicker__day, div[class*="DatePicker"] button, [role="gridcell"] button, [role="gridcell"]')].filter(b => {
-            const txt = b.textContent.trim();
-            const disabled = b.getAttribute('data-disabled') === 'true' || b.getAttribute('aria-disabled') === 'true' || b.disabled;
-            return txt === String(targetDay) && !disabled;
+          const dayBtns = Array.from(document.querySelectorAll('button.DatePicker__day'));
+          const target = dayBtns.find(b => {
+            const txt = b.innerText.trim();
+            const aria = b.getAttribute('aria-label') || '';
+            const match = txt === String(targetDay) || aria.includes(String(targetDay) + ' de');
+            const disabled = b.getAttribute('data-disabled') === 'true' || b.disabled;
+            return match && !disabled;
           });
-
-          if (modernDays.length > 0) {
-            modernDays[0].click();
+          if (target) {
+            target.scrollIntoView({ block: 'center' });
+            target.click();
             return true;
           }
 
           // 2. Candidate day elements fallback
-          const allCandidates = [...document.querySelectorAll('span, div, button, td, a')].filter(el => {
-            const txt = (el.innerText || el.textContent || '').trim();
-            if (txt !== String(targetDay)) return false;
-            if (el.offsetParent === null && el.clientHeight === 0 && el.clientWidth === 0) return false;
-            const cls = (el.className || '').toString().toLowerCase();
-            if (cls.includes('disabled') || cls.includes('prev-month') || cls.includes('next-month') || cls.includes('outside')) return false;
-            if (el.children.length > 1) return false;
-            return true;
+          const allCandidates = [...document.querySelectorAll('.DatePicker__panel button, [role="gridcell"] button, [role="gridcell"]')].filter(b => {
+            const txt = b.innerText.trim();
+            const disabled = b.getAttribute('data-disabled') === 'true' || b.getAttribute('aria-disabled') === 'true' || b.disabled;
+            return txt === String(targetDay) && !disabled;
           });
-
           if (allCandidates.length > 0) {
-            const best = allCandidates.find(el => {
-              const p = el.closest('div[class*="calendar"], div[class*="picker"], div[class*="popper"], div[data-floating-ui-portal], table');
-              return p !== null;
-            }) || allCandidates[allCandidates.length - 1];
-            best.click();
+            allCandidates[0].click();
             return true;
           }
           return false;
@@ -1288,8 +1291,14 @@ class DOMHandler:
       try:
         success_dom = await self._page.evaluate("""
           () => {
-            const texts = ['vídeo programado', 'seu vídeo foi programado', 'video scheduled', 'your video has been scheduled', 'gerenciar publicações', 'manage your posts', 'carregar outro vídeo', 'upload another video'];
-            const allElements = document.querySelectorAll('h1, h2, h3, h4, div[class*="title"], div[class*="success"], div[role="dialog"]');
+            const texts = [
+              'vídeo programado', 'seu vídeo foi programado', 'video scheduled',
+              'your video has been scheduled', 'gerenciar publicações', 'gerenciar suas publicações',
+              'manage your posts', 'carregar outro vídeo', 'upload another video',
+              'publicação agendada', 'agendamento confirmado', 'sucesso', 'publicado',
+              'ver publicações', 'vídeo enviado', 'post scheduled', 'scheduled'
+            ];
+            const allElements = document.querySelectorAll('h1, h2, h3, h4, div[class*="title"], div[class*="success"], div[role="dialog"], button');
             for (const el of allElements) {
               const t = (el.textContent || '').toLowerCase();
               if (texts.some(txt => t.includes(txt))) return el.textContent.trim();
@@ -1319,7 +1328,7 @@ class DOMHandler:
             return !hasCaption && !hasPostBtn && !hasError;
           }
         """)
-        if form_gone and elapsed >= 10:
+        if form_gone and elapsed >= 4:
           self._log_success("Post submitted successfully (upload form exited without errors)")
           return True
       except Exception:

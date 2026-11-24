@@ -420,10 +420,10 @@ class LocalFolderWatcher:
             logger.error(f"Cannot archive job {job_id}: job not found.")
             return False
 
-        if job.status != JobStatus.SCHEDULED:
+        if str(job.status).upper() not in ("SCHEDULED", "PUBLISHED", JobStatus.SCHEDULED.value, JobStatus.PUBLISHED.value):
             logger.warning(
-                f"Cannot archive file for job {job_id}: status is {job.status.value}, "
-                f"only SCHEDULED jobs are eligible for archival."
+                f"Cannot archive file for job {job_id}: status is {job.status}, "
+                f"only SCHEDULED/PUBLISHED jobs are eligible for archival."
             )
             return False
 

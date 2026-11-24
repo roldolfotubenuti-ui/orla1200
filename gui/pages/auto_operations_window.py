@@ -511,12 +511,12 @@ class AutoOperationsMainWindow(QMainWindow):
             self.coordinator.set_real_publishing(self._is_real_publishing, confirmed=True)
             self.coordinator.start()
 
-            # Hook para mover arquivo para _PROCESSADOS quando SCHEDULED
+            # Hook para mover arquivo para _PROCESSADOS quando SCHEDULED ou PUBLISHED
             def on_coord_event(ev: str, data: dict[str, Any]) -> None:
                 if ev == "job.completed":
                     jid = data.get("job_id")
                     st = data.get("status")
-                    if jid and st == JobStatus.SCHEDULED and self.watcher:
+                    if jid and st in (JobStatus.SCHEDULED, JobStatus.SCHEDULED.value, "SCHEDULED", JobStatus.PUBLISHED, JobStatus.PUBLISHED.value, "PUBLISHED") and self.watcher:
                         self.watcher.archive_processed_video(jid)
 
             self.coordinator.register_callback(on_coord_event)
