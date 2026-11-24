@@ -264,6 +264,7 @@ class AutoOperationsMainWindow(QMainWindow):
     """Janela principal de automação autônoma do TKS Engine 3.0."""
 
     log_signal = pyqtSignal(str)
+    card_status_signal = pyqtSignal(str, str, str)  # dept_id, text, state
 
     def __init__(self, theme_manager: ThemeManager | None = None) -> None:
         super().__init__()
@@ -286,8 +287,10 @@ class AutoOperationsMainWindow(QMainWindow):
         self._is_real_publishing = True
         self._active_table_filter = "ALL"
         self._table_filter_buttons: dict[str, QPushButton] = {}
+        self._is_refreshing = False
 
         self.log_signal.connect(self._append_log_message)
+        self.card_status_signal.connect(self._on_card_status_update)
 
         self._build_ui()
         self._start_automation()
@@ -514,26 +517,31 @@ class AutoOperationsMainWindow(QMainWindow):
 
         root_layout.addLayout(bottom_bar)
 
+    def _on_card_status_update(self, dept_id: str, text: str, state: str) -> None:
+        """Atualização 100% thread-safe dos cards de personagens na thread do Qt."""
+        if dept_id in self._character_cards:
+            self._character_cards[dept_id].set_status(text, state)
+
     def _start_automation(self) -> None:
         """Inicializa os subsistemas e ativa o monitoramento em segundo plano."""
         self._append_log_message("Iniciando TKS Engine 3.0 em modo automático...")
 
-        # Conectar eventos do bridge para atualizar os cards dos personagens
+        # Conectar eventos do bridge para atualizar os cards dos personagens (via sinais thread-safe)
         def bridge_listener(event: dict[str, Any]) -> None:
             dept_id = event.get("department_id")
             event_name = event.get("event")
             status = event.get("status")
 
-            if dept_id and dept_id in self._character_cards:
-                card = self._character_cards[dept_id]
+            if dept_id:
                 if event_name in ("video.upload_started", "account.execution_started"):
-                    card.set_status("Levantando da mesa / Upload em andamento...", "working")
+                    self.card_status_signal.emit(dept_id, "Levantando da mesa / Upload em andamento...", "working")
                 elif event_name in ("video.scheduled", "task.completed"):
-                    card.set_status("Vídeo agendado no TikTok Studio! ⭐", "success")
+                    self.card_status_signal.emit(dept_id, "Vídeo agendado no TikTok Studio! ⭐", "success")
                 elif event_name == "video.failed":
-                    card.set_status(f"Falha: {event.get('extra', {}).get('error', 'Erro')}", "failed")
+                    err = event.get("extra", {}).get("error", "Erro")
+                    self.card_status_signal.emit(dept_id, f"Falha: {err}", "failed")
 
-            # Atualizar log
+            # Atualizar log de forma assíncrona segura
             msg = f"[{datetime.now().strftime('%H:%M:%S')}] {event_name}: {status or ''} ({dept_id or ''})"
             self.log_signal.emit(msg)
 
@@ -696,6 +704,9 @@ class AutoOperationsMainWindow(QMainWindow):
 
     def _refresh_data(self) -> None:
         """Atualiza a tabela de tarefas e estatísticas do banco de dados com suporte a filtros por mesa."""
+        if self._is_refreshing:
+            return
+        self._is_refreshing = True
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.execute("""
@@ -843,6 +854,8 @@ class AutoOperationsMainWindow(QMainWindow):
 
         except Exception as e:
             pass
+        finally:
+            self._is_refreshing = False
 
     def _append_log_message(self, text: str) -> None:
         """Adiciona mensagem no console de logs com auto-scroll."""
