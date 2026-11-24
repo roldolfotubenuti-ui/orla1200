@@ -123,12 +123,12 @@ class CharacterIllustrationCard(QFrame):
         self.account_username = data["account"]
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setMinimumHeight(135)
         self.setStyleSheet("""
             CharacterIllustrationCard {
                 background-color: #1A1D24;
                 border: 1px solid #2D323F;
                 border-radius: 10px;
-                padding: 10px;
             }
             CharacterIllustrationCard:hover {
                 border: 1px solid #3E4456;
@@ -137,13 +137,14 @@ class CharacterIllustrationCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(6)
 
         # Header com emoji/ilustração e nome
         top_row = QHBoxLayout()
+        top_row.setSpacing(10)
         self.lbl_emoji = QLabel(data["emoji"])
-        self.lbl_emoji.setStyleSheet("font-size: 26px;")
+        self.lbl_emoji.setStyleSheet("font-size: 26px; line-height: 1;")
         top_row.addWidget(self.lbl_emoji)
 
         title_box = QVBoxLayout()
@@ -151,7 +152,7 @@ class CharacterIllustrationCard(QFrame):
         self.lbl_name = QLabel(f"Mesa {data['folder']} — {data['role']}")
         self.lbl_name.setStyleSheet("font-size: 13px; font-weight: 800; color: #FFFFFF;")
         self.lbl_char = QLabel(f"{data['name']} ({data['drawer']})")
-        self.lbl_char.setStyleSheet("font-size: 10px; color: #8F95A3;")
+        self.lbl_char.setStyleSheet("font-size: 11px; color: #8F95A3;")
         title_box.addWidget(self.lbl_name)
         title_box.addWidget(self.lbl_char)
         top_row.addLayout(title_box)
@@ -183,7 +184,7 @@ class CharacterIllustrationCard(QFrame):
             color: #8F95A3;
             font-size: 11px;
             font-weight: 600;
-            padding: 6px 8px;
+            padding: 6px 10px;
             border-radius: 6px;
             border: 1px solid #232732;
         """)
@@ -519,11 +520,14 @@ class AutoOperationsMainWindow(QMainWindow):
             async def worker_loop() -> None:
                 while True:
                     try:
-                        if self.coordinator and self.coordinator.is_running:
-                            await self.coordinator.step()
+                        if self.coordinator and not self.coordinator.is_paused and not self.coordinator.is_stopped:
+                            dry_run = not self.coordinator.allow_real_publishing
+                            spawned = await self.coordinator.step(dry_run=dry_run)
+                            if spawned > 0:
+                                self.log_signal.emit(f"Iniciando processamento para {spawned} conta(s) no TikTok Studio...")
                     except Exception as exc:
                         self.log_signal.emit(f"Erro no loop do coordinator: {exc}")
-                    await asyncio.sleep(2.0)
+                    await asyncio.sleep(2.5)
 
             loop.run_until_complete(worker_loop())
 
