@@ -116,12 +116,14 @@ CHARACTERS_MAP = [
 class CharacterIllustrationCard(QFrame):
     """Card ilustrativo de um personagem exibindo seu departamento, conta e status ao vivo."""
 
-    def __init__(self, data: dict[str, str], parent: QWidget | None = None) -> None:
+    def __init__(self, data: dict[str, str], on_click: Any = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.data = data
         self.dept_id = data["dept_id"]
         self.account_username = data["account"]
+        self.on_click = on_click
 
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setFixedHeight(120)
         self.setStyleSheet("""
@@ -131,7 +133,7 @@ class CharacterIllustrationCard(QFrame):
                 border-radius: 10px;
             }
             CharacterIllustrationCard:hover {
-                border: 1px solid #3E4456;
+                border: 1px solid #84CC16;
                 background-color: #20242D;
             }
         """)
@@ -158,6 +160,19 @@ class CharacterIllustrationCard(QFrame):
         top_row.addLayout(title_box)
         top_row.addStretch()
 
+        # Botão/Badge de Calendário
+        self.btn_cal_badge = QLabel("📅 Calendário")
+        self.btn_cal_badge.setStyleSheet("""
+            background-color: rgba(132, 204, 22, 0.15);
+            color: #84CC16;
+            font-size: 10px;
+            font-weight: 800;
+            padding: 3px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(132, 204, 22, 0.3);
+        """)
+        top_row.addWidget(self.btn_cal_badge)
+
         # Estrela de sucesso (inicialmente oculta)
         self.lbl_star = QLabel("⭐")
         self.lbl_star.setStyleSheet("font-size: 18px;")
@@ -165,6 +180,11 @@ class CharacterIllustrationCard(QFrame):
         top_row.addWidget(self.lbl_star)
 
         layout.addLayout(top_row)
+
+    def mousePressEvent(self, event) -> None:
+        if self.on_click:
+            self.on_click(self.account_username)
+        super().mousePressEvent(event)
 
         # Info de Conta e Pasta
         info_row = QHBoxLayout()
@@ -365,6 +385,25 @@ class AutoOperationsMainWindow(QMainWindow):
         """)
         header_row.addWidget(self.badge_mode)
 
+        self.btn_calendar = QPushButton("📅 Calendário de Agendamentos")
+        self.btn_calendar.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(132, 204, 22, 0.2);
+                color: #84CC16;
+                font-weight: 800;
+                font-size: 11px;
+                padding: 6px 14px;
+                border-radius: 6px;
+                border: 1px solid #84CC16;
+            }
+            QPushButton:hover {
+                background-color: #84CC16;
+                color: #0F172A;
+            }
+        """)
+        self.btn_calendar.clicked.connect(lambda: self._open_calendar("@unamyti"))
+        header_row.addWidget(self.btn_calendar)
+
         self.btn_web_office = QPushButton("🌐 Abrir Escritório 3D")
         self.btn_web_office.clicked.connect(lambda: webbrowser.open("http://localhost:3005"))
         header_row.addWidget(self.btn_web_office)
@@ -376,7 +415,7 @@ class AutoOperationsMainWindow(QMainWindow):
         grid_characters.setSpacing(12)
 
         for i, char_data in enumerate(CHARACTERS_MAP):
-            card = CharacterIllustrationCard(char_data)
+            card = CharacterIllustrationCard(char_data, on_click=self._open_calendar)
             self._character_cards[char_data["dept_id"]] = card
             row = i // 3
             col = i % 3
@@ -539,6 +578,15 @@ class AutoOperationsMainWindow(QMainWindow):
 
         t = threading.Thread(target=run_loop, daemon=True)
         t.start()
+
+    def _open_calendar(self, account: str = "@unamyti") -> None:
+        """Abre o diálogo do calendário de agendamentos para a conta/mesa selecionada."""
+        try:
+            from gui.pages.employee_calendar_dialog import EmployeeCalendarDialog
+            dlg = EmployeeCalendarDialog(initial_account=account, db=self.db, parent=self)
+            dlg.exec()
+        except Exception as exc:
+            self._append_log_message(f"Erro ao abrir calendário de agendamentos: {exc}")
 
     def _force_rescan(self) -> None:
         """Dispara varredura forçada nas pastas."""
