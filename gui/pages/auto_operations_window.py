@@ -123,7 +123,7 @@ class CharacterIllustrationCard(QFrame):
         self.account_username = data["account"]
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setMinimumHeight(135)
+        self.setFixedHeight(120)
         self.setStyleSheet("""
             CharacterIllustrationCard {
                 background-color: #1A1D24;
@@ -137,18 +137,18 @@ class CharacterIllustrationCard(QFrame):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(4)
 
         # Header com emoji/ilustração e nome
         top_row = QHBoxLayout()
-        top_row.setSpacing(10)
+        top_row.setSpacing(8)
         self.lbl_emoji = QLabel(data["emoji"])
-        self.lbl_emoji.setStyleSheet("font-size: 26px; line-height: 1;")
+        self.lbl_emoji.setStyleSheet("font-size: 24px;")
         top_row.addWidget(self.lbl_emoji)
 
         title_box = QVBoxLayout()
-        title_box.setSpacing(2)
+        title_box.setSpacing(1)
         self.lbl_name = QLabel(f"Mesa {data['folder']} — {data['role']}")
         self.lbl_name.setStyleSheet("font-size: 13px; font-weight: 800; color: #FFFFFF;")
         self.lbl_char = QLabel(f"{data['name']} ({data['drawer']})")
@@ -184,7 +184,7 @@ class CharacterIllustrationCard(QFrame):
             color: #8F95A3;
             font-size: 11px;
             font-weight: 600;
-            padding: 6px 10px;
+            padding: 4px 8px;
             border-radius: 6px;
             border: 1px solid #232732;
         """)
@@ -386,19 +386,20 @@ class AutoOperationsMainWindow(QMainWindow):
 
         # Tabela de Vídeos / Fila de Agendamento
         lbl_queue = QLabel("FILA DE PROCESSAMENTO & AGENDAMENTOS REAIS")
-        lbl_queue.setStyleSheet("font-size: 12px; font-weight: 800; color: #94A3B8; margin-top: 4px;")
+        lbl_queue.setStyleSheet("font-size: 13px; font-weight: 800; color: #CBD5E1; margin-top: 10px; margin-bottom: 2px;")
         root_layout.addWidget(lbl_queue)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Pasta",
             "Arquivo de Vídeo",
-            "Personagem / Dept",
-            "Conta TikTok",
+            "Personagem / Conta",
+            "Entrada (Detectado)",
+            "Data Programada (TikTok)",
             "Legenda",
-            "Data & Horário",
             "Status",
+            "Detalhes / Erro",
         ])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -408,13 +409,14 @@ class AutoOperationsMainWindow(QMainWindow):
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
-        self.table.setFixedHeight(170)
+        self.table.setFixedHeight(180)
         root_layout.addWidget(self.table)
 
         # Console de Logs ao Vivo
         lbl_console = QLabel("LOG OPERACIONAL EM TEMPO REAL")
-        lbl_console.setStyleSheet("font-size: 12px; font-weight: 800; color: #94A3B8;")
+        lbl_console.setStyleSheet("font-size: 12px; font-weight: 800; color: #94A3B8; margin-top: 6px;")
         root_layout.addWidget(lbl_console)
 
         self.log_console = QTextEdit()
@@ -427,6 +429,10 @@ class AutoOperationsMainWindow(QMainWindow):
         self.btn_rescan = QPushButton("🔄 Forçar Varredura de Pastas")
         self.btn_rescan.clicked.connect(self._force_rescan)
         bottom_bar.addWidget(self.btn_rescan)
+
+        self.btn_clear_history = QPushButton("🧹 Limpar Histórico de Testes")
+        self.btn_clear_history.clicked.connect(self._clear_old_history)
+        bottom_bar.addWidget(self.btn_clear_history)
 
         self.btn_toggle_mode = QPushButton("Alternar para Homologação (Simulado)")
         self.btn_toggle_mode.clicked.connect(self._toggle_publishing_mode)
@@ -574,15 +580,45 @@ class AutoOperationsMainWindow(QMainWindow):
             self.btn_toggle_mode.setText("Alternar para Modo Real (Oficial)")
             self._append_log_message("Modo Homologação ATIVADO: Playwright preencherá o formulário sem clicar em Agendar.")
 
+    def _clear_old_history(self) -> None:
+        """Limpa registros de testes antigos (FAILED, SUPERSEDED) deixando a tabela limpa."""
+        try:
+            with self.db.get_connection() as conn:
+                cur = conn.execute("DELETE FROM jobs WHERE status IN ('SUPERSEDED', 'FAILED')")
+                conn.commit()
+                deleted = cur.rowcount
+            self._append_log_message(f"🧹 Histórico antigo limpo ({deleted} registros de teste removidos).")
+            self._refresh_data()
+        except Exception as e:
+            self._append_log_message(f"Erro ao limpar histórico: {e}")
+
+    def _format_relative_time(self, raw_dt: str) -> str:
+        """Formata data/hora para indicar claramente 'Hoje às HH:MM' ou 'Ontem às HH:MM'."""
+        if not raw_dt:
+            return "-"
+        try:
+            from datetime import timedelta
+            cleaned = raw_dt.replace("T", " ").split(".")[0]
+            dt = datetime.strptime(cleaned, "%Y-%m-%d %H:%M:%S")
+            today = datetime.now().date()
+            if dt.date() == today:
+                return f"Hoje às {dt.strftime('%H:%M:%S')}"
+            elif dt.date() == (today - timedelta(days=1)):
+                return f"Ontem às {dt.strftime('%H:%M')}"
+            else:
+                return dt.strftime("%d/%m %H:%M")
+        except Exception:
+            return raw_dt
+
     def _refresh_data(self) -> None:
         """Atualiza a tabela de tarefas e estatísticas do banco de dados."""
         try:
             with self.db.get_connection() as conn:
                 cursor = conn.execute("""
-                    SELECT id, filename, department_id, account_id, caption, schedule_time, status
+                    SELECT id, filename, department_id, account_id, caption, schedule_time, status, created_at, error_message
                     FROM jobs
                     ORDER BY created_at DESC
-                    LIMIT 20
+                    LIMIT 30
                 """)
                 rows = cursor.fetchall()
 
@@ -596,6 +632,8 @@ class AutoOperationsMainWindow(QMainWindow):
                     caption = str(row["caption"] or "ABSURDO")
                     sched_time = str(row["schedule_time"] or "")
                     status = str(row["status"] or "")
+                    created_at = str(row["created_at"] or "")
+                    err_msg = str(row["error_message"] or "")
 
                     if status == "SCHEDULED":
                         scheduled_count += 1
@@ -603,15 +641,22 @@ class AutoOperationsMainWindow(QMainWindow):
                     # Mapear pasta e personagem
                     char_info = next((c for c in CHARACTERS_MAP if c["dept_id"] == dept_id), None)
                     folder_str = char_info["folder"] if char_info else "-"
-                    dept_str = f"{char_info['emoji']} {char_info['role']}" if char_info else dept_id
+                    char_name = char_info["role"] if char_info else dept_id
                     acc_str = char_info["account"] if char_info else acc_id
+                    emoji = char_info["emoji"] if char_info else "📁"
+
+                    created_str = self._format_relative_time(created_at)
 
                     self.table.setItem(r_idx, 0, QTableWidgetItem(f"Pasta {folder_str}"))
                     self.table.setItem(r_idx, 1, QTableWidgetItem(fname))
-                    self.table.setItem(r_idx, 2, QTableWidgetItem(dept_str))
-                    self.table.setItem(r_idx, 3, QTableWidgetItem(acc_str))
-                    self.table.setItem(r_idx, 4, QTableWidgetItem(caption))
-                    self.table.setItem(r_idx, 5, QTableWidgetItem(sched_time))
+                    self.table.setItem(r_idx, 2, QTableWidgetItem(f"{emoji} {char_name} ({acc_str})"))
+                    
+                    # Horário de entrada claro (Hoje/Ontem)
+                    self.table.setItem(r_idx, 3, QTableWidgetItem(created_str))
+                    
+                    # Data programada no TikTok
+                    self.table.setItem(r_idx, 4, QTableWidgetItem(sched_time))
+                    self.table.setItem(r_idx, 5, QTableWidgetItem(caption))
 
                     st_item = QTableWidgetItem(status)
                     if status == "SCHEDULED":
@@ -620,7 +665,13 @@ class AutoOperationsMainWindow(QMainWindow):
                         st_item.setForeground(QColor("#64B5F6"))
                     elif status == "FAILED":
                         st_item.setForeground(QColor("#E57373"))
+                    elif status == "SUPERSEDED":
+                        st_item.setForeground(QColor("#9E9E9E"))
                     self.table.setItem(r_idx, 6, st_item)
+
+                    # Detalhes / Erro
+                    detail_text = err_msg if err_msg else ("Agendamento Confirmado ✅" if status == "SCHEDULED" else "")
+                    self.table.setItem(r_idx, 7, QTableWidgetItem(detail_text))
 
                 active_count = len([r for r in rows if r["status"] in ("RUNNING", "UPLOADING", "PROCESSING", "SUBMITTING")])
                 self.lbl_stats.setText(f"Concorrência: {active_count} / 2 | Agendamentos Confirmados: {scheduled_count}")
