@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +34,7 @@ class UploadWorker(QThread):
 
   progress_update = pyqtSignal(int, int, int, int)
   log_message = pyqtSignal(str, int)
+  upload_started = pyqtSignal(str)
   upload_complete = pyqtSignal(bool, str)
   finished_all = pyqtSignal()
   error_occurred = pyqtSignal(str)
@@ -85,6 +87,7 @@ class UploadWorker(QThread):
     try:
       asyncio.run(self._execute())
     except Exception as exc:
+      self._logger.error(f"Fatal worker exception: {exc}\n{traceback.format_exc()}")
       self.error_occurred.emit(str(exc))
 
   async def _execute(self) -> None:
@@ -106,10 +109,14 @@ class UploadWorker(QThread):
       await browser_manager.launch(self._username)
 
       for index, task in enumerate(self._tasks):
-        self._logger.info(f"Processing: {index + 1} of {len(self._tasks)}")
+        while self._pause_flag and not self._stop_flag:
+          await asyncio.sleep(0.5)
         if self._stop_flag:
           self._logger.info("Upload stopped by user")
           break
+
+        self._logger.info(f"Processing: {index + 1} of {len(self._tasks)} ({task.file_path.name})")
+        self.upload_started.emit(task.file_path.name)
 
         processed = success_count + failed_count
         if self._process_limit > 0 and processed >= self._process_limit:
@@ -118,21 +125,18 @@ class UploadWorker(QThread):
           )
           break
 
-        while self._pause_flag:
-          await asyncio.sleep(0.5)
-          if self._stop_flag:
-            break
-        if self._stop_flag:
-          break
-
         if task.schedule_time is not None:
+          # Phase 2.5: Strict revalidation before each video upload
           valid, reason = self._rules.validate(task.schedule_time)
           if not valid:
-            self._logger.warning(f"Skipping {task.file_path.name}: {reason}")
+            self._logger.error(
+              f"Skipping {task.file_path.name}: Schedule time ({DateTimeUtils.format_for_display(task.schedule_time)}) "
+              f"is no longer valid at execution time ({reason}). Aborting upload to prevent rejection."
+            )
             result = UploadResult(
               success=False,
               file_path=task.file_path,
-              message="Schedule validation failed",
+              message="Schedule validation failed (expired or insufficient lead time)",
               timestamp=datetime.now(),
               error=reason,
             )
@@ -146,15 +150,22 @@ class UploadWorker(QThread):
         datetime_utils = DateTimeUtils()
         dom_handler = DOMHandler(page, self._logger, datetime_utils)
         uploader = Uploader(dom_handler, self._logger, self._storage_dir)
+        telemetry_base = getattr(browser_manager, "telemetry", {})
 
         if self._retry_enabled:
           result = await uploader.retry_upload(
             task=task,
             max_retries=3,
             navigate_callback=browser_manager.new_upload_page,
+            telemetry_base=telemetry_base,
+            username=self._username,
           )
         else:
-          result = await uploader.upload_video(task)
+          result = await uploader.upload_video(
+            task=task,
+            telemetry_base=telemetry_base,
+            username=self._username,
+          )
 
         self._results.append(result)
         if result.success:
@@ -166,8 +177,31 @@ class UploadWorker(QThread):
         self.upload_complete.emit(result.success, task.file_path.name)
 
         if index < total - 1 and not self._stop_flag:
-          await browser_manager.new_upload_page()
-          await asyncio.sleep(3)
+          # Prepare the existing browser page for the next video without destroying Chromium
+          await browser_manager.prepare_for_next_video()
+
+      # Queue completion summary
+      total_time = sum(
+        getattr(r, "telemetry", {}).get("total_sec", 0.0)
+        for r in self._results
+        if r and getattr(r, "telemetry", None)
+      )
+      avg_time = (total_time / len(self._results)) if self._results else 0.0
+      restart_count = getattr(browser_manager, "restart_count", 0)
+      reused_sessions = sum(
+        1 for r in self._results
+        if r and getattr(r, "telemetry", {}).get("session_reused", False)
+      )
+      self._logger.info(
+        f"[RESUMO DA FILA] Conta: @{self._username}\n"
+        f"  • Total de Vídeos: {len(self._tasks)}\n"
+        f"  • Concluídos com Sucesso: {success_count}\n"
+        f"  • Falhas: {failed_count}\n"
+        f"  • Inicializações do Navegador: {1 + restart_count}\n"
+        f"  • Sessões Reutilizadas: {reused_sessions}\n"
+        f"  • Reinicializações/Recuperações: {restart_count}\n"
+        f"  • Tempo Total da Fila: {total_time:.2f}s (Média: {avg_time:.2f}s / vídeo)"
+      )
 
     except RateLimitError as exc:
       self._stop_flag = True
@@ -175,6 +209,7 @@ class UploadWorker(QThread):
       self._logger.error(f"Account rate limit reached: {toast_message}")
       self.rate_limited.emit(toast_message)
     except Exception as exc:
+      self._logger.error(f"Execution error: {exc}\n{traceback.format_exc()}")
       self.error_occurred.emit(str(exc))
     finally:
       await browser_manager.close()
@@ -209,3 +244,11 @@ class UploadWorker(QThread):
     :return: Upload results.
     """
     return self._results
+
+  @property
+  def username(self) -> str:
+    """Return the account username bound to this worker.
+
+    :return: Account username.
+    """
+    return self._username

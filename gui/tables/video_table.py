@@ -72,8 +72,12 @@ def build_status_badge(status: str) -> QWidget:
   role_map = {
     "Pending": "pending",
     "Scheduled": "scheduled",
+    "Processing": "scheduled",
+    "Paused": "scheduled",
+    "Elapsed (Unverified)": "scheduled",
     "Published": "published",
     "Failed": "failed",
+    "Unknown": "failed",
     "Ready": "pending",
   }
   container = QWidget()

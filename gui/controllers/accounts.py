@@ -1,401 +1,596 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
+import time
+from pathlib import Path
+from typing import Any
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QHBoxLayout, QHeaderView, QTableWidgetItem, QWidget
+from PyQt6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QTableWidgetItem,
+    QWidget,
+)
 
+from core.account_model import AccountAuthStatus, AccountRecord
+from gui.controllers.session_validation_worker import SessionValidationWorker
 from gui.dialogs.account_dialog import AccountDialog
+from gui.dialogs.multiaccount_dialogs import (
+    AssignDepartmentDialog,
+    EditAccountIdentificationDialog,
+)
+from gui.widgets.icon import build_icon
+from gui.widgets.tiktok_style import (
+    TT_BG_HOVER,
+    TT_BORDER,
+    TT_GREEN,
+    TT_RED,
+    TT_RED_HOVER,
+    TT_TEXT,
+    TT_TEXT_2,
+)
 
 
 class AccountsControllerMixin:
-  """Handle account management workflows."""
+    """Handle account management workflows for Multiaccount TikTok Engine."""
 
-  def _load_accounts(self) -> None:
-    """Scan cookie files and refresh account UI surfaces.
+    def _load_accounts(self) -> None:
+        """Scan cookie files and registry, refresh account UI surfaces."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc_mgr._migrate_legacy_cookies()
+        all_accounts = acc_mgr.list_accounts()
 
-    :return: None
-    """
-    accounts = self._cookie_manager.list_accounts()
-    current_username = self._window.account_dropdown.currentText()
-    self._window.account_dropdown.clear()
-    if accounts:
-      self._window.account_dropdown.addItems(accounts)
-      index = self._window.account_dropdown.findText(current_username)
-      if index >= 0:
-        self._window.account_dropdown.setCurrentIndex(index)
-      else:
-        self._window.account_dropdown.setCurrentIndex(0)
-    else:
-      self._logger.warning("No cookie files found in /cookies directory")
-      self._window.accounts_page.accounts_current_metric.set_value("-")
+        dropdown_items_set: set[str] = set()
+        for acc in all_accounts:
+            if acc.enabled and acc.username:
+                dropdown_items_set.add(acc.username.lstrip("@"))
 
-    self._refresh_accounts_table(accounts)
-    self._update_account_selection_summary()
+        for u in self._cookie_manager.list_accounts():
+            dropdown_items_set.add(u.lstrip("@"))
 
-  def _on_account_selected(self, username: str) -> None:
-    """Handle account dropdown changes.
+        dropdown_items = sorted(list(dropdown_items_set))
 
-    :param username: Selected username.
-    :return: None
-    """
-    if username:
-      self._logger.info(f"Selected account: @{username}")
-      self._window.accounts_page.accounts_current_metric.set_value(f"@{username}")
-      self._window.accounts_page.accounts_current_metric.set_caption(
-        "Used for the next execution"
-      )
-    else:
-      self._window.accounts_page.accounts_current_metric.set_value("-")
+        current_username = self._window.account_dropdown.currentText()
+        self._window.account_dropdown.clear()
 
-    self._refresh_accounts_table()
+        if dropdown_items:
+            self._window.account_dropdown.addItems(dropdown_items)
+            index = self._window.account_dropdown.findText(current_username)
+            if index >= 0:
+                self._window.account_dropdown.setCurrentIndex(index)
+            else:
+                self._window.account_dropdown.setCurrentIndex(0)
+        else:
+            self._logger.warning("Nenhuma conta cadastrada ou ativa no sistema")
+            self._window.accounts_page.accounts_current_metric.set_value("-")
 
-  def _on_add_account_clicked(self) -> None:
-    """Open the add-account dialog.
+        self._refresh_accounts_table()
+        self._update_account_selection_summary()
 
-    :return: None
-    """
-    dialog = AccountDialog("Add account", parent=self._window)
-    dialog.save_btn.clicked.connect(lambda: self._save_new_account(dialog))
-    dialog.exec()
+    def _on_account_selected(self, username: str) -> None:
+        """Handle account dropdown changes."""
+        self._cached_username = username
+        if username:
+            self._logger.info(f"Selected account: @{username}")
+            self._window.accounts_page.accounts_current_metric.set_value(f"@{username}")
+            self._window.accounts_page.accounts_current_metric.set_caption("Usada na próxima execução")
+            if hasattr(self._window, "stepper_bar"):
+                self._window.stepper_bar.set_active_account(username)
+            if hasattr(self._window, "executor_page") and hasattr(self._window.executor_page, "metric_account"):
+                self._window.executor_page.metric_account.set_value(f"@{username}")
+        else:
+            self._window.accounts_page.accounts_current_metric.set_value("-")
+            if hasattr(self._window, "stepper_bar"):
+                self._window.stepper_bar.set_active_account("")
+            if hasattr(self._window, "executor_page") and hasattr(self._window.executor_page, "metric_account"):
+                self._window.executor_page.metric_account.set_value("-")
 
-  def _on_edit_account_clicked(self) -> None:
-    """Open an edit dialog for the selected account.
+        # Refresh cards and table active markers without infinite recursion
+        current_username = self._window.account_dropdown.currentText()
+        acc_mgr = self._cookie_manager.account_manager
+        all_accounts = acc_mgr.list_accounts()
 
-    :return: None
-    """
-    usernames = self._selected_account_usernames()
-    if len(usernames) != 1:
-      self._logger.warning("Select exactly one account to edit")
-      return
+        card_items = []
+        for acc in all_accounts:
+            user_label = acc.username or acc.display_title
+            is_valid = acc.auth_status in (
+                AccountAuthStatus.AUTHENTICATED.value,
+                AccountAuthStatus.STRUCTURALLY_VALID.value,
+            )
+            card_items.append({
+                "username": user_label,
+                "display_name": acc.display_title or user_label,
+                "session_valid": is_valid,
+                "session_text": acc.auth_status,
+                "last_used": acc.last_validated_at or acc.imported_at,
+                "is_active": user_label == current_username or acc.username == current_username,
+            })
+        if hasattr(self._window.accounts_page, "populate_account_cards"):
+            self._window.accounts_page.populate_account_cards(card_items)
 
-    username = usernames[0]
-    cookie_path = self._cookies_dir / f"@{username}-cookie.json"
-    try:
-      with open(cookie_path, "r", encoding="utf-8") as file_obj:
-        cookie_text = file_obj.read()
-    except OSError as exc:
-      self._logger.error(f"Failed to read @{username}: {exc}")
-      return
+        if self._worker is None or not self._worker.isRunning():
+            self._tasks = []
+            self._window.start_btn.setEnabled(False)
+            if self._window.folder_dropdown.currentText() and self._videos:
+                self._on_scan_clicked()
 
-    dialog = AccountDialog(
-      "Edit account",
-      username=username,
-      cookie_text=cookie_text,
-      parent=self._window,
-    )
-    dialog.save_btn.clicked.connect(
-      lambda: self._save_existing_account(username, dialog)
-    )
-    dialog.exec()
-
-  def _on_random_account_requested(self) -> None:
-    """Pick a random account from the selected rows or full list.
-
-    :return: None
-    """
-    usernames = self._selected_account_usernames()
-    if not usernames:
-      usernames = self._cookie_manager.list_accounts()
-    if not usernames:
-      self._logger.warning("No accounts available for random selection")
-      return
-
-    username = random.choice(usernames)
-    index = self._window.account_dropdown.findText(username)
-    if index >= 0:
-      self._window.account_dropdown.setCurrentIndex(index)
-    self._logger.info(f"Random account selected: @{username}")
-
-  def _refresh_accounts_table(self, accounts: list[str] | None = None) -> None:
-    """Populate the account management table.
-
-    :param accounts: Optional list of usernames.
-    :return: None
-    """
-    if accounts is None:
-      accounts = self._cookie_manager.list_accounts()
-
-    table = self._window.accounts_table
-    table.setRowCount(len(accounts))
-    current_username = self._window.account_dropdown.currentText()
-
-    for row_index, username in enumerate(accounts):
-      cookie_path = self._cookies_dir / f"@{username}-cookie.json"
-      stats = cookie_path.stat() if cookie_path.exists() else None
-      date_added = self._format_human_datetime(
-        stats.st_ctime if stats is not None else None
-      )
-      last_used = self._format_human_datetime(
-        self._storage_service.last_used_timestamp(username)
-      )
-      status_text = "Selected" if username == current_username else "Available"
-      status_role = "scheduled" if username == current_username else "pending"
-
-      row_item = QTableWidgetItem(str(row_index + 1))
-      row_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-      table.setItem(row_index, 0, row_item)
-
-      username_item = QTableWidgetItem(f"@{username}")
-      username_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-      table.setItem(row_index, 1, username_item)
-
-      date_added_item = QTableWidgetItem(date_added)
-      date_added_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-      table.setItem(row_index, 2, date_added_item)
-
-      last_used_item = QTableWidgetItem(last_used)
-      last_used_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-      table.setItem(row_index, 3, last_used_item)
-
-      status_item = QTableWidgetItem(status_text)
-      status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-      table.setItem(row_index, 4, status_item)
-      table.setCellWidget(
-        row_index,
-        4,
-        self._build_role_badge(status_text, status_role),
-      )
-      table.setCellWidget(
-        row_index,
-        5,
-        self._build_account_actions(username),
-      )
-
-    table.resizeColumnsToContents()
-    table.setColumnWidth(4, max(table.columnWidth(4), 172))
-    table.setColumnWidth(5, max(table.columnWidth(5), 148))
-    table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-    table.resizeRowsToContents()
-    for row_index in range(table.rowCount()):
-      table.setRowHeight(row_index, max(table.rowHeight(row_index), 68))
-    self._window.accounts_page.accounts_total_metric.set_value(str(len(accounts)))
-
-  def _build_account_actions(self, username: str) -> QWidget:
-    """Build edit and delete buttons for the accounts table.
-
-    :param username: Account username.
-    :return: Action cell widget.
-    """
-    container = QWidget()
-    layout = QHBoxLayout(container)
-    layout.setContentsMargins(8, 4, 8, 4)
-    layout.setSpacing(10)
-    layout.addWidget(
-      self._build_table_icon_button(
-        "fa5s.edit",
-        lambda: self._edit_account(username),
-      )
-    )
-    layout.addWidget(
-      self._build_table_icon_button(
-        "fa5s.trash-alt",
-        lambda: self._delete_accounts([username]),
-        danger=True,
-      )
-    )
-    return container
-
-  def _edit_account(self, username: str) -> None:
-    """Select a row and open the edit dialog.
-
-    :param username: Account username.
-    :return: None
-    """
-    table = self._window.accounts_table
-    for row in range(table.rowCount()):
-      item = table.item(row, 1)
-      if item is not None and item.text().lstrip("@") == username:
-        table.selectRow(row)
-        break
-    self._on_edit_account_clicked()
-
-  def _update_account_selection_summary(self) -> None:
-    """Refresh metrics for the account table selection.
-
-    :return: None
-    """
-    selected_count = len(self._selected_account_usernames())
-    self._window.accounts_page.accounts_selected_metric.set_value(str(selected_count))
-
-  def _save_new_account(self, dialog: AccountDialog) -> None:
-    """Validate and save a new account cookie file.
-
-    :param dialog: Active account dialog.
-    :return: None
-    """
-    username, cookie_data = self._validate_account_dialog(dialog)
-    if username is None or cookie_data is None:
-      return
-
-    cookie_path = self._cookies_dir / f"@{username}-cookie.json"
-    if cookie_path.exists():
-      dialog.show_error(
-        f"Account @{username} already exists. Edit the existing profile instead."
-      )
-      return
-
-    try:
-      self._cookies_dir.mkdir(parents=True, exist_ok=True)
-      with open(cookie_path, "w", encoding="utf-8") as file_obj:
-        json.dump(cookie_data, file_obj, indent=2, ensure_ascii=False)
-    except OSError as exc:
-      dialog.show_error(f"Failed to save file: {exc}")
-      return
-
-    self._logger.success(f"Account @{username} added successfully")
-    dialog.accept()
-    self._load_accounts()
-    index = self._window.account_dropdown.findText(username)
-    if index >= 0:
-      self._window.account_dropdown.setCurrentIndex(index)
-
-  def _save_existing_account(
-    self,
-    original_username: str,
-    dialog: AccountDialog,
-  ) -> None:
-    """Save account edits from the modal dialog.
-
-    :param original_username: Original username.
-    :param dialog: Active account dialog.
-    :return: None
-    """
-    username, cookie_data = self._validate_account_dialog(dialog)
-    if username is None or cookie_data is None:
-      return
-
-    original_path = self._cookies_dir / f"@{original_username}-cookie.json"
-    target_path = self._cookies_dir / f"@{username}-cookie.json"
-    if username != original_username and target_path.exists():
-      dialog.show_error(f"Account @{username} already exists.")
-      return
-
-    try:
-      self._cookies_dir.mkdir(parents=True, exist_ok=True)
-      with open(target_path, "w", encoding="utf-8") as file_obj:
-        json.dump(cookie_data, file_obj, indent=2, ensure_ascii=False)
-      if original_path.exists() and original_path != target_path:
-        original_path.unlink()
-        self._storage_service.rename_account_artifacts(
-          original_username,
-          username,
+    def _on_import_json_clicked(self) -> None:
+        """Batch import multiple TikTok Cookie-Editor JSON files with DPAPI protection."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self._window,
+            "Selecionar Arquivos de Cookies TikTok JSON (Cookie-Editor)",
+            "",
+            "Arquivos JSON (*.json);;Todos os Arquivos (*.*)",
         )
-    except OSError as exc:
-      dialog.show_error(f"Failed to save account: {exc}")
-      return
 
-    self._logger.success(f"Account @{original_username} updated")
-    dialog.accept()
-    self._load_accounts()
-    index = self._window.account_dropdown.findText(username)
-    if index >= 0:
-      self._window.account_dropdown.setCurrentIndex(index)
+        if not file_paths:
+            return
 
-  def _validate_account_dialog(
-    self,
-    dialog: AccountDialog,
-  ) -> tuple[str | None, list[dict] | None]:
-    """Validate dialog fields and parse cookie JSON.
+        acc_mgr = self._cookie_manager.account_manager
+        results = acc_mgr.import_cookie_files([Path(p) for p in file_paths])
 
-    :param dialog: Account dialog.
-    :return: Tuple of username and cookie list.
-    """
-    dialog.clear_error()
-    username = dialog.get_username()
-    cookie_text = dialog.get_cookie_text()
+        total_imported = len(results)
+        valid_count = sum(1 for _, rep in results if rep.is_valid)
+        total_cookies = sum(rep.valid_cookies for _, rep in results)
 
-    if not username:
-      dialog.show_error("Username is required.")
-      return None, None
-    if username.startswith("@"):
-      username = username[1:]
-    if not username:
-      dialog.show_error("Username is required.")
-      return None, None
-    if not re.match(r"^[\w.]+$", username):
-      dialog.show_error(
-        "Username contains invalid characters. Use letters, numbers, dots, and underscores only."
-      )
-      return None, None
+        summary_msg = (
+            f"<b>Importação Concluída:</b> {total_imported} arquivo(s) processado(s).<br><br>"
+            f"• <b>Contas Estruturalmente Válidas:</b> {valid_count} de {total_imported}<br>"
+            f"• <b>Total de Cookies Normalizados:</b> {total_cookies}<br>"
+            f"• <b>Proteção:</b> Criptografados com <b>Windows DPAPI</b> em repouso.<br><br>"
+            "<i>Nenhum cookie é armazenado ou exposto em texto plano.</i><br><br>"
+            "Deseja <b>remover com segurança os arquivos JSON originais</b> agora que as cópias criptografadas estão salvas?"
+        )
 
-    if not cookie_text:
-      dialog.show_error("Cookie JSON is required.")
-      return None, None
+        reply = QMessageBox.question(
+            self._window,
+            "Importação Concluída — Criptografia DPAPI",
+            summary_msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
 
-    try:
-      cookie_data = json.loads(cookie_text)
-    except json.JSONDecodeError as exc:
-      dialog.show_error(f"Invalid JSON: {exc}")
-      return None, None
+        if reply == QMessageBox.StandardButton.Yes:
+            deleted_count = 0
+            for fp in file_paths:
+                try:
+                    p = Path(fp)
+                    if p.exists():
+                        p.unlink()
+                        deleted_count += 1
+                except Exception as exc:
+                    self._logger.warning(f"Não foi possível apagar {fp}: {exc}")
+            self._logger.info(f"Removidos {deleted_count} arquivos JSON originais desprotegidos.")
 
-    if not isinstance(cookie_data, list):
-      dialog.show_error("Cookie JSON must be a JSON array [ ... ].")
-      return None, None
-    if len(cookie_data) == 0:
-      dialog.show_error("Cookie array is empty.")
-      return None, None
+        self._logger.success(f"Importadas {total_imported} conta(s) com sucesso.")
+        self._load_accounts()
 
-    required_fields = ["name", "value", "domain", "path"]
-    for index, entry in enumerate(cookie_data):
-      if not isinstance(entry, dict):
-        dialog.show_error(f"Cookie #{index} is not a JSON object.")
-        return None, None
-      for field in required_fields:
-        value = entry.get(field)
-        if value is None or (isinstance(value, str) and not value.strip()):
-          dialog.show_error(
-            f'Cookie #{index} is missing required field "{field}".'
-          )
-          return None, None
+    def _refresh_accounts_table(self, accounts: list[str] | None = None) -> None:
+        """Populate the 5-column account management table matching Section 9."""
+        acc_mgr = self._cookie_manager.account_manager
+        all_accounts = acc_mgr.list_accounts()
 
-    return username, cookie_data
+        table = self._window.accounts_table
+        table.setRowCount(len(all_accounts))
+        current_username = self._window.account_dropdown.currentText()
 
-  def _on_delete_accounts_clicked(self) -> None:
-    """Delete the selected accounts from disk.
+        for row_index, acc in enumerate(all_accounts):
+            # Col 0: Conta (Nome/Título da conta)
+            conta_label = acc.display_title or f"Conta TikTok {row_index + 1:02d}"
+            item_conta = QTableWidgetItem(conta_label)
+            item_conta.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row_index, 0, item_conta)
 
-    :return: None
-    """
-    usernames = self._selected_account_usernames()
-    if not usernames:
-      self._logger.warning("Select at least one account to delete")
-      return
-    self._delete_accounts(usernames)
+            # Col 1: Usuário (@username ou pendente)
+            user_label = f"@{acc.username}" if acc.username else "Pendente de validação"
+            item_user = QTableWidgetItem(user_label)
+            item_user.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row_index, 1, item_user)
 
-  def _delete_accounts(self, usernames: list[str]) -> None:
-    """Delete account cookie files and refresh the UI.
+            # Col 2: Autenticação (Badge visual com estado estrito)
+            status_widget = self._build_auth_status_badge(acc.auth_status, acc.enabled)
+            table.setCellWidget(row_index, 2, status_widget)
 
-    :param usernames: Usernames to delete.
-    :return: None
-    """
-    deleted = 0
-    for username in usernames:
-      cookie_path = self._cookies_dir / f"@{username}-cookie.json"
-      try:
-        if cookie_path.exists():
-          cookie_path.unlink()
-          deleted += 1
-      except OSError as exc:
-        self._logger.error(f"Failed to delete @{username}: {exc}")
-    if deleted:
-      self._logger.success(f"Deleted {deleted} account(s)")
-    self._load_accounts()
+            # Col 3: Departamento
+            dept_label = acc.department_id or "Não atribuído"
+            item_dept = QTableWidgetItem(dept_label)
+            item_dept.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row_index, 3, item_dept)
 
-  def _selected_account_usernames(self) -> list[str]:
-    """Return unique usernames selected in the accounts table.
+            # Col 4: Ações (Testar, Depto, Editar, Desativar, Remover)
+            actions_widget = self._build_multiaccount_actions(acc)
+            table.setCellWidget(row_index, 4, actions_widget)
 
-    :return: Selected usernames.
-    """
-    usernames: list[str] = []
-    table = self._window.accounts_table
-    for item in table.selectedItems():
-      row = item.row()
-      username_item = table.item(row, 1)
-      if username_item is None:
-        continue
-      username = username_item.text().lstrip("@")
-      if username not in usernames:
-        usernames.append(username)
-    return usernames
+        table.resizeColumnsToContents()
+        table.setColumnWidth(4, max(table.columnWidth(4), 220))
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for row in range(table.rowCount()):
+            table.setRowHeight(row, 54)
+
+        active_count = sum(1 for a in all_accounts if a.enabled)
+        self._window.accounts_page.accounts_total_metric.set_value(str(len(all_accounts)))
+        self._window.accounts_page.accounts_selected_metric.set_value(str(active_count))
+
+        # Rebuild visual cards
+        card_items = []
+        for acc in all_accounts:
+            user_label = acc.username or acc.display_title
+            is_valid = acc.auth_status in (
+                AccountAuthStatus.AUTHENTICATED.value,
+                AccountAuthStatus.STRUCTURALLY_VALID.value,
+            )
+            card_items.append({
+                "username": user_label,
+                "display_name": acc.display_title or user_label,
+                "session_valid": is_valid,
+                "session_text": acc.auth_status,
+                "last_used": acc.last_validated_at or acc.imported_at,
+                "is_active": user_label == current_username or acc.username == current_username,
+            })
+        if hasattr(self._window.accounts_page, "populate_account_cards"):
+            self._window.accounts_page.populate_account_cards(card_items)
+
+    def _build_auth_status_badge(self, status: str, enabled: bool) -> QWidget:
+        """Create colored status badge for authentication state."""
+        container = QWidget()
+        lay = QHBoxLayout(container)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        badge = QLabel(status if enabled else "DISABLED")
+
+        if not enabled or status == AccountAuthStatus.DISABLED.value:
+            badge.setStyleSheet("background: #F3F4F6; color: #9CA3AF; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        elif status == AccountAuthStatus.AUTHENTICATED.value:
+            badge.setStyleSheet("background: #E6F9EE; color: #00B649; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        elif status == AccountAuthStatus.VALIDATING.value:
+            badge.setStyleSheet("background: #EFF6FF; color: #2563EB; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        elif status == AccountAuthStatus.STRUCTURALLY_VALID.value:
+            badge.setStyleSheet("background: #E0F2FE; color: #0284C7; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        elif status == AccountAuthStatus.INVALID_SESSION.value:
+            badge.setStyleSheet("background: #FEE2E2; color: #DC2626; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        elif status == AccountAuthStatus.EXPIRED.value:
+            badge.setStyleSheet("background: #FEF3D6; color: #D97706; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        elif status in (AccountAuthStatus.VALIDATION_REQUIRED.value, AccountAuthStatus.REAUTH_REQUIRED.value):
+            badge.setStyleSheet("background: #FEF9C3; color: #CA8A04; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+        else:
+            badge.setStyleSheet("background: #F3F4F6; color: #4B5563; font-size: 11px; font-weight: 700; border-radius: 10px; padding: 3px 10px;")
+
+        lay.addWidget(badge)
+        return container
+
+    def _build_multiaccount_actions(self, acc: AccountRecord) -> QWidget:
+        """Build action buttons for account row (Test, Dept, Edit, Disable/Enable, Delete)."""
+        container = QWidget()
+        lay = QHBoxLayout(container)
+        lay.setContentsMargins(6, 2, 6, 2)
+        lay.setSpacing(6)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 1. Test / Validate Session button
+        test_btn = QPushButton()
+        test_btn.setFixedSize(30, 30)
+        test_btn.setToolTip("Testar / Validar Sessão (Modo Leitura)")
+        test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        test_btn.setIcon(build_icon("fa5s.sync-alt", "#0284C7"))
+        test_btn.setStyleSheet(f"border: 1px solid {TT_BORDER}; border-radius: 4px; background: #FFFFFF;")
+        test_btn.clicked.connect(lambda: self._test_account_session(acc.account_id))
+        lay.addWidget(test_btn)
+
+        # 2. Assign Department button
+        dept_btn = QPushButton()
+        dept_btn.setFixedSize(30, 30)
+        dept_btn.setToolTip("Associar Departamento")
+        dept_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        dept_btn.setIcon(build_icon("fa5.folder", TT_TEXT))
+        dept_btn.setStyleSheet(f"border: 1px solid {TT_BORDER}; border-radius: 4px; background: #FFFFFF;")
+        dept_btn.clicked.connect(lambda: self._assign_department(acc.account_id))
+        lay.addWidget(dept_btn)
+
+        # 3. Edit Identification button
+        edit_btn = QPushButton()
+        edit_btn.setFixedSize(30, 30)
+        edit_btn.setToolTip("Editar Rótulo ou Usuário")
+        edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit_btn.setIcon(build_icon("fa5s.edit", TT_TEXT))
+        edit_btn.setStyleSheet(f"border: 1px solid {TT_BORDER}; border-radius: 4px; background: #FFFFFF;")
+        edit_btn.clicked.connect(lambda: self._edit_account_identification(acc.account_id))
+        lay.addWidget(edit_btn)
+
+        # 4. Toggle Enabled / Disabled
+        toggle_btn = QPushButton()
+        toggle_btn.setFixedSize(30, 30)
+        toggle_btn.setToolTip("Desativar Conta" if acc.enabled else "Ativar Conta")
+        toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle_icon = "fa5s.toggle-on" if acc.enabled else "fa5s.toggle-off"
+        toggle_color = TT_GREEN if acc.enabled else TT_TEXT_2
+        toggle_btn.setIcon(build_icon(toggle_icon, toggle_color))
+        toggle_btn.setStyleSheet(f"border: 1px solid {TT_BORDER}; border-radius: 4px; background: #FFFFFF;")
+        toggle_btn.clicked.connect(lambda: self._toggle_account_enabled(acc.account_id))
+        lay.addWidget(toggle_btn)
+
+        # 5. Delete Account button
+        del_btn = QPushButton()
+        del_btn.setFixedSize(30, 30)
+        del_btn.setToolTip("Remover Conta")
+        del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        del_btn.setIcon(build_icon("fa5s.trash-alt", TT_RED))
+        del_btn.setStyleSheet("border: 1px solid #FEE2E2; border-radius: 4px; background: #FFF1F3;")
+        del_btn.clicked.connect(lambda: self._delete_single_account(acc.account_id))
+        lay.addWidget(del_btn)
+
+        return container
+
+    def _test_account_session(self, account_id: str) -> None:
+        """Validate account session in read-only mode via background worker."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account(account_id)
+        if not acc:
+            return
+
+        acc_mgr.update_account(account_id, auth_status=AccountAuthStatus.VALIDATING.value)
+        self._refresh_accounts_table()
+        self._logger.info(f"Iniciando validação de sessão (modo leitura) para {acc.display_name}...")
+
+        worker = SessionValidationWorker(acc_mgr, account_id, headless=True)
+        worker.validation_finished.connect(self._on_session_validation_finished)
+        # Keep worker reference alive
+        self._validation_workers = getattr(self, "_validation_workers", [])
+        self._validation_workers.append(worker)
+        worker.start()
+
+    def _on_session_validation_finished(
+        self,
+        account_id: str,
+        is_auth: bool,
+        msg: str,
+        detected_user: str,
+    ) -> None:
+        """Handle completion of background session validation."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account(account_id)
+        acc_name = acc.display_name if acc else account_id[:8]
+
+        if is_auth:
+            self._logger.success(f"Validação de sessão bem-sucedida para {acc_name}: {msg}")
+            QMessageBox.information(
+                self._window,
+                "Sessão Autenticada",
+                f"A sessão de <b>{acc_name}</b> foi validada com sucesso no TikTok Studio!<br>"
+                f"Usuário identificado: <b>@{detected_user or acc.username}</b>",
+            )
+        else:
+            self._logger.warning(f"Resultado da validação para {acc_name}: {msg}")
+            QMessageBox.warning(
+                self._window,
+                "Resultado da Validação",
+                f"Validação para <b>{acc_name}</b>:<br><br>{msg}",
+            )
+
+        self._load_accounts()
+
+    def _assign_department(self, account_id: str) -> None:
+        """Open dialog to assign account to one of the 6 departments."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account(account_id)
+        if not acc:
+            return
+
+        dlg = AssignDepartmentDialog(acc, parent=self._window)
+        if dlg.exec():
+            dept = dlg.get_selected_department()
+            acc_mgr.update_account(account_id, department_id=dept)
+            self._logger.info(f"Conta {acc.display_name} associada ao departamento '{dept or 'Não atribuído'}'")
+            self._load_accounts()
+
+    def _edit_account_identification(self, account_id: str) -> None:
+        """Open dialog to edit account title and username."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account(account_id)
+        if not acc:
+            return
+
+        dlg = EditAccountIdentificationDialog(acc, parent=self._window)
+        if dlg.exec():
+            new_title = dlg.get_title()
+            new_user = dlg.get_username()
+            acc.display_title = new_title
+            acc_mgr.update_account(account_id, username=new_user)
+            self._logger.info(f"Identificação atualizada para {acc.display_name}")
+            self._load_accounts()
+
+    def _toggle_account_enabled(self, account_id: str) -> None:
+        """Toggle account enabled/disabled state."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account(account_id)
+        if not acc:
+            return
+
+        new_state = not acc.enabled
+        acc_mgr.update_account(account_id, enabled=new_state)
+        self._logger.info(f"Conta {acc.display_name} {'ativada' if new_state else 'desativada'}")
+        self._load_accounts()
+
+    def _delete_single_account(self, account_id: str) -> None:
+        """Remove account record and secure DPAPI credentials with user confirmation."""
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account(account_id)
+        if not acc:
+            return
+
+        reply = QMessageBox.question(
+            self._window,
+            "Confirmar Remoção de Conta",
+            f"Deseja realmente remover o cadastro e as credenciais protegidas da conta <b>{acc.display_name}</b>?<br><br>"
+            "<i>Nota: Históricos de agendamentos e publicações anteriores são preservados.</i>",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            acc_mgr.delete_account(account_id, delete_credentials=True)
+            self._logger.success(f"Conta {acc.display_name} removida.")
+            self._load_accounts()
+
+    def _on_add_account_clicked(self) -> None:
+        """Open manual JSON paste dialog."""
+        dialog = AccountDialog("Adicionar conta", parent=self._window)
+        dialog.save_btn.clicked.connect(lambda: self._save_new_account(dialog))
+        dialog.exec()
+
+    def _on_edit_account_clicked(self) -> None:
+        """Edit currently selected account from table."""
+        usernames = self._selected_account_usernames()
+        if not usernames:
+            self._logger.warning("Selecione uma conta na tabela para editar")
+            return
+
+        username = usernames[0]
+        acc_mgr = self._cookie_manager.account_manager
+        acc = acc_mgr.get_account_by_username(username)
+        if acc:
+            self._edit_account_identification(acc.account_id)
+        else:
+            self._edit_account(username)
+
+    def _on_random_account_requested(self) -> None:
+        """Pick a random active account."""
+        dropdown = self._window.account_dropdown
+        count = dropdown.count()
+        if count <= 0:
+            self._logger.warning("Nenhuma conta disponível para sorteio")
+            return
+
+        rand_idx = random.randint(0, count - 1)
+        dropdown.setCurrentIndex(rand_idx)
+        self._logger.info(f"Conta sorteada: @{dropdown.currentText()}")
+
+    def _on_account_card_selected(self, username: str) -> None:
+        """Select account from card and advance to Step 2 (Videos)."""
+        clean = username.lstrip("@")
+        index = self._window.account_dropdown.findText(clean)
+        if index >= 0:
+            self._window.account_dropdown.setCurrentIndex(index)
+        self._on_account_selected(clean)
+        if hasattr(self, "_save_wizard_state"):
+            self._save_wizard_state()
+        if hasattr(self, "_go_to_wizard_step"):
+            self._go_to_wizard_step(1)
+        elif hasattr(self._window, "set_wizard_step"):
+            self._window.set_wizard_step(1)
+
+    def _edit_account(self, username: str) -> None:
+        """Select row and open edit."""
+        table = self._window.accounts_table
+        for row in range(table.rowCount()):
+            item = table.item(row, 1)
+            if item is not None and item.text().lstrip("@") == username:
+                table.selectRow(row)
+                break
+        self._on_edit_account_clicked()
+
+    def _update_account_selection_summary(self) -> None:
+        """Refresh selection metric."""
+        selected_count = len(self._selected_account_usernames())
+        self._window.accounts_page.accounts_selected_metric.set_value(str(selected_count))
+
+    def _save_new_account(self, dialog: AccountDialog) -> None:
+        """Validate and save a new account via manual paste dialog."""
+        username, cookie_data = self._validate_account_dialog(dialog)
+        if username is None or cookie_data is None:
+            return
+
+        acc_mgr = self._cookie_manager.account_manager
+        # Save temp json and import
+        temp_dir = self._cookies_dir / "temp_import"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_file = temp_dir / f"@{username}-cookie.json"
+
+        try:
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(cookie_data, f, indent=2, ensure_ascii=False)
+            acc_mgr.import_cookie_files([temp_file])
+            temp_file.unlink(missing_ok=True)
+        except Exception as exc:
+            dialog.show_error(f"Falha ao salvar conta: {exc}")
+            return
+
+        self._logger.success(f"Conta @{username} adicionada com sucesso.")
+        dialog.accept()
+        self._load_accounts()
+
+    def _validate_account_dialog(
+        self,
+        dialog: AccountDialog,
+    ) -> tuple[str | None, list[dict] | None]:
+        """Validate dialog fields."""
+        dialog.clear_error()
+        username = dialog.get_username()
+        cookie_text = dialog.get_cookie_text()
+
+        if not username:
+            dialog.show_error("Usuário é obrigatório.")
+            return None, None
+        username = username.lstrip("@").strip()
+        if not re.match(r"^[\w.]+$", username):
+            dialog.show_error("Nome de usuário com caracteres inválidos.")
+            return None, None
+
+        if not cookie_text:
+            dialog.show_error("Cookies JSON é obrigatório.")
+            return None, None
+
+        try:
+            cookie_data = json.loads(cookie_text)
+        except json.JSONDecodeError as exc:
+            dialog.show_error(f"JSON inválido: {exc}")
+            return None, None
+
+        if not isinstance(cookie_data, list) or len(cookie_data) == 0:
+            dialog.show_error("Cookies JSON deve ser um array não vazio.")
+            return None, None
+
+        return username, cookie_data
+
+    def _on_delete_accounts_clicked(self) -> None:
+        """Delete selected accounts."""
+        usernames = self._selected_account_usernames()
+        if not usernames:
+            self._logger.warning("Selecione pelo menos uma conta para remover")
+            return
+        self._delete_accounts(usernames)
+
+    def _delete_accounts(self, usernames: list[str]) -> None:
+        """Delete account records by usernames."""
+        acc_mgr = self._cookie_manager.account_manager
+        for u in usernames:
+            acc = acc_mgr.get_account_by_username(u)
+            if acc:
+                acc_mgr.delete_account(acc.account_id, delete_credentials=True)
+            else:
+                p = self._cookies_dir / f"@{u}-cookie.json"
+                if p.exists():
+                    p.unlink(missing_ok=True)
+        self._load_accounts()
+
+    def _selected_account_usernames(self) -> list[str]:
+        """Return usernames selected in table."""
+        usernames: list[str] = []
+        table = self._window.accounts_table
+        for item in table.selectedItems():
+            row = item.row()
+            username_item = table.item(row, 1)
+            if username_item is None:
+                continue
+            username = username_item.text().lstrip("@")
+            if username not in usernames and username != "Pendente de validação":
+                usernames.append(username)
+        return usernames

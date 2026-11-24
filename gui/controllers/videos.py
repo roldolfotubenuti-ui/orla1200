@@ -27,12 +27,19 @@ class VideoQueueControllerMixin:
     else:
       video_id = "<videoid>"
 
-    parts = [f"Cre: {video_id}"]
+    use_prefix = (
+      hasattr(self._window, "prefix_caption_check")
+      and self._window.prefix_caption_check.isChecked()
+    )
+    parts: list[str] = []
+    if use_prefix:
+      parts.append(f"Cre: {video_id}")
     caption_body = self._window.caption_input.toPlainText().strip()
     if caption_body:
       parts.append(caption_body)
 
-    self._window.caption_preview.setText(f"Preview: {' | '.join(parts)}")
+    preview_text = " | ".join(parts) if parts else "(empty)"
+    self._window.caption_preview.setText(f"Preview: {preview_text}")
 
   def _extract_tags(self, text: str) -> list[str]:
     """Extract normalized hashtags from free-form text.
@@ -121,6 +128,7 @@ class VideoQueueControllerMixin:
 
     self._scheduled_basenames = set()
     self._failed_basenames = set()
+    self._unknown_basenames = set()
     self._published_video_ids = set()
     self._published_entries = {}
 
@@ -129,28 +137,34 @@ class VideoQueueControllerMixin:
     if username:
       scheduled_data = self._storage_service.load_scheduled(username)
       existing = self._storage_service.get_user_uploads(scheduled_data)
-      self._scheduled_basenames = FileScanner.get_scheduled_basenames(existing)
+
+      latest_status_by_file: dict[str, str] = {}
+      for upload in existing:
+        fname = Path(str(upload.get("file", ""))).name
+        st = str(upload.get("status", ""))
+        if fname and st:
+          latest_status_by_file[fname] = st
+
+      self._scheduled_basenames = {
+        fname
+        for fname, st in latest_status_by_file.items()
+        if st in ("scheduled", "success", "unknown")
+      }
+      self._unknown_basenames = {
+        fname
+        for fname, st in latest_status_by_file.items()
+        if st == "unknown"
+      }
       self._failed_basenames = {
-        Path(str(upload.get("file", ""))).name
-        for upload in existing
-        if upload.get("status") == "failed"
+        fname
+        for fname, st in latest_status_by_file.items()
+        if st == "failed"
       }
 
-      to_publish: list[dict] = []
-      for upload in existing:
-        if upload.get("status") == "success":
-          timestamp = upload.get("timestamp")
-          if timestamp and datetime.fromtimestamp(timestamp) < datetime.now():
-            to_publish.append(upload)
-      if to_publish:
-        self._storage_service.migrate_to_published(
-          username,
-          to_publish,
-          self._normalize_video_id,
-        )
-        scheduled_data = self._storage_service.load_scheduled(username)
-        existing = self._storage_service.get_user_uploads(scheduled_data)
-        self._scheduled_basenames = FileScanner.get_scheduled_basenames(existing)
+      # Past-due scheduled entries are NOT automatically moved to published,
+      # because elapsed local clock time does not prove publication on TikTok.
+      # They remain in schedules/@username.json and are displayed as
+      # 'Elapsed (Unverified)' while staying blocked against automatic re-upload.
 
       published_data = self._storage_service.load_published(username)
       for entry in published_data.get("published", []):
@@ -167,7 +181,6 @@ class VideoQueueControllerMixin:
       1
       for video in self._videos
       if not self._is_video_unavailable(video.filename)
-      and video.filename not in self._failed_basenames
     )
 
     self._window.video_total_label.setText(f"Total: {total_available}")
@@ -178,37 +191,40 @@ class VideoQueueControllerMixin:
 
     self._populate_video_table(existing, username)
     self._update_caption_preview()
+    if hasattr(self, "_refresh_wizard_videos_page"):
+      self._refresh_wizard_videos_page()
 
   def _is_video_unavailable(self, filename: str) -> bool:
-    """Return whether a video is already scheduled or published.
+    """Return whether a video is already scheduled, unknown, or published.
 
     :param filename: Video filename.
     :return: ``True`` when unavailable.
     """
-    if filename in self._scheduled_basenames:
+    if filename in self._scheduled_basenames or filename in self._unknown_basenames:
       return True
     stem = Path(filename).stem
+    normalized_id = self._normalize_video_id(Path(filename))
     for video_id in self._published_video_ids:
-      if stem.startswith(video_id):
+      if video_id == filename or video_id == stem or (
+        "_" not in stem and video_id == normalized_id
+      ):
         return True
     return False
 
   def lookup_scheduled(self, filename: str, uploads: list[dict]) -> dict | None:
-    """Look up a scheduled upload entry for a filename.
+    """Look up the latest scheduled upload entry for an exact filename.
 
     :param filename: Video filename.
     :param uploads: Upload records.
     :return: Schedule metadata or ``None``.
     """
-    current_video_id = self._normalize_video_id(Path(filename))
-    for upload in uploads:
-      upload_file = str(upload.get("file", ""))
+    stem = Path(filename).stem
+    for upload in reversed(uploads):
+      upload_file = Path(str(upload.get("file", ""))).name
       upload_video_id = str(upload.get("video_id") or "")
-      upload_prefix = self._normalize_video_id(Path(upload_file)) if upload_file else ""
       matches = (
         upload_file == filename
-        or upload_prefix == current_video_id
-        or upload_video_id == current_video_id
+        or (upload_video_id and upload_video_id in (filename, stem))
       )
       if not matches:
         continue
@@ -236,14 +252,17 @@ class VideoQueueControllerMixin:
     return None
 
   def _lookup_published(self, filename: str) -> tuple[bool, str]:
-    """Look up published metadata for a filename.
+    """Look up published metadata for an exact filename or stem.
 
     :param filename: Video filename.
     :return: Tuple of match flag and formatted published date.
     """
-    current_video_id = self._normalize_video_id(Path(filename))
+    stem = Path(filename).stem
+    normalized_id = self._normalize_video_id(Path(filename))
     for video_id, raw_date in self._published_entries.items():
-      if video_id == current_video_id or current_video_id.startswith(video_id):
+      if video_id == filename or video_id == stem or (
+        "_" not in stem and video_id == normalized_id
+      ):
         return True, self._format_iso_datetime(raw_date) if raw_date else "-"
     return False, "-"
 
@@ -277,29 +296,42 @@ class VideoQueueControllerMixin:
     }
     status_totals = {name: 0 for name in filter_state}
 
+    now_ts = datetime.now().timestamp()
     rows: list[tuple[VideoFile, str, str, str, float, int]] = []
     for video in self._videos:
-      is_scheduled = video.filename in self._scheduled_basenames
+      is_unknown = video.filename in getattr(self, "_unknown_basenames", set())
+      is_scheduled = video.filename in self._scheduled_basenames and not is_unknown
       is_failed = video.filename in self._failed_basenames
       is_published, published_text = self._lookup_published(video.filename)
       scheduled = self.lookup_scheduled(video.filename, data_uploads)
       schedule_text = scheduled["date"] if scheduled else "-"
 
-      if is_scheduled:
-        status = "Scheduled"
+      if is_unknown:
+        status = "Unknown"
         sort_ts = scheduled.get("timestamp", 0) if scheduled else 0
+        filter_bucket = "Failed"
+      elif is_scheduled:
+        sort_ts = scheduled.get("timestamp", 0) if scheduled else 0
+        if sort_ts and sort_ts < now_ts:
+          status = "Elapsed (Unverified)"
+        else:
+          status = "Scheduled"
+        filter_bucket = "Scheduled"
       elif is_published:
         status = "Published"
         sort_ts = 0.0
+        filter_bucket = "Published"
       elif is_failed:
         status = "Failed"
         sort_ts = 0.0
+        filter_bucket = "Failed"
       else:
         status = "Pending"
         sort_ts = 0.0
+        filter_bucket = "Pending"
 
-      status_totals[status] += 1
-      if filter_state[status]:
+      status_totals[filter_bucket] += 1
+      if filter_state[filter_bucket]:
         rows.append((
           video,
           status,
@@ -351,6 +383,8 @@ class VideoQueueControllerMixin:
 
     self._window.video_selected_label.setText(f"Selected: {selected_count}")
     self._window.video_total_label.setText(f"Total: {len(rows)}")
+    if hasattr(self, "_update_execution_metrics"):
+      self._update_execution_metrics()
 
   def _populate_video_table_widget(
     self,
@@ -412,9 +446,9 @@ class VideoQueueControllerMixin:
       table.setItem(row_index, 5, status_item)
       table.setCellWidget(row_index, 5, build_status_badge(status))
 
-      if allow_selection and status == "Pending" and pending_index < limit:
+      if allow_selection and status in ("Pending", "Failed") and pending_index < limit:
         selected_count += 1
-      if status == "Pending":
+      if status in ("Pending", "Failed"):
         pending_index += 1
 
     table.resizeColumnsToContents()
@@ -454,7 +488,10 @@ class VideoQueueControllerMixin:
       self._refresh_video_table()
 
   def _get_selected_videos(self) -> list[VideoFile]:
-    """Return pending videos checked in the main queue table.
+    """Return eligible videos (Pending, plus confirmed Failed when visible) in the main queue table.
+
+    Videos with status Scheduled, Elapsed (Unverified), Published, or Unknown
+    are strictly excluded to prevent duplicate or unverified re-uploads.
 
     :return: Selected video files.
     """
@@ -464,7 +501,12 @@ class VideoQueueControllerMixin:
     pending_index = 0
     for row in range(table.rowCount()):
       status_item = table.item(row, 5)
-      if status_item and status_item.text() in ("Scheduled", "Published", "Failed"):
+      if status_item and status_item.text() in (
+        "Scheduled",
+        "Elapsed (Unverified)",
+        "Published",
+        "Unknown",
+      ):
         continue
       if pending_index >= limit:
         break

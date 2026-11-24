@@ -1,0 +1,802 @@
+<USER_REQUEST>
+# TKS ENGINE 3.0 — FASE 2
+## BROWSERRUNTIME + SQLITE + ROUND-ROBIN + EXECUÇÃO PARALELA CONTROLADA
+
+**Projeto:** TKS Engine + TKS Virtual Office  
+**Ambiente:** Windows  
+**Tecnologias:** Python, PyQt6, Playwright Async API, Chromium e SQLite.  
+**Contas cadastradas:** 6 contas TikTok existentes.  
+**Departamentos:** 6 departamentos existentes.  
+**Concorrência inicial:** 2 contas simultâneas.  
+**Distribuição:** Round-Robin independente por departamento.
+
+---
+
+# 1. OBJETIVO
+
+Implementar a infraestrutura operacional Multiaccount da TKS Engine 3.0.
+
+A Fase 1 já implementou, conforme relatório anterior:
+
+- Cadastro de múltiplas contas.
+- Importação de cookies JSON.
+- Criptografia Windows DPAPI.
+- Validação de sessões.
+- Identificação dos usuários TikTok.
+- Associação com departamentos.
+- Interface de gerenciamento.
+- Testes de compatibilidade.
+
+Nesta fase, transformar essa estrutura em um sistema capaz de gerenciar várias sessões simultaneamente.
+
+A arquitetura deverá permitir:
+
+1. Manter um Chromium gerenciado pela Engine.
+2. Criar contextos isolados para diferentes contas.
+3. Reutilizar sessões enquanto estiverem ativas.
+4. Criar filas independentes por conta.
+5. Distribuir vídeos por Round-Robin.
+6. Executar duas contas simultaneamente.
+7. Preservar a distribuição após reinicializações.
+8. Preparar expansão futura para mais contas.
+9. Preservar integralmente o funcionamento atual da TKS Engine.
+
+**NÃO RECONSTRUIR O PROJETO.**
+
+**NÃO APAGAR OU SUBSTITUIR O GERENCIADOR MULTIACCOUNT DA FASE 1.**
+
+**NÃO MODIFICAR DESNECESSARIAMENTE O UPLOADER ATUAL.**
+
+# 2. AUDITORIA DA FASE 1
+
+Antes de qualquer implementação, inspecionar os componentes entregues anteriormente:
+
+- `core/dpapi_crypto.py`
+- `core/cookie_validator.py`
+- `core/account_model.py`
+- `core/account_manager.py`
+- `core/cookie_manager.py`
+- `gui/controllers/session_validation_worker.py`
+- `gui/controllers/accounts.py`
+- `gui/pages/accounts_page.py`
+- `gui/tables/accounts_table.py`
+- `gui/dialogs/multiaccount_dialogs.py`
+- `tests/test_multiaccount_phase1.py`
+
+Verificar também:
+
+- `core/browser_manager.py`
+- `core/uploader.py`
+- `core/dom_handler.py`
+- `gui/controllers/upload_worker.py`
+- `gui/services/storage_service.py`
+- `core/scheduler.py`
+- `core/schedule_rule_engine.py`
+
+Confirmar os seis cadastros existentes.
+
+Não imprimir valores dos cookies.
+
+Não descriptografar credenciais para relatórios.
+
+Não modificar os departamentos atualmente associados.
+
+Não substituir IDs de contas.
+
+Não apagar os arquivos criptografados.
+
+A implementação deverá utilizar diretamente o `AccountManager` existente.
+
+# 3. BROWSERRUNTIME — GERENCIADOR CENTRAL DE NAVEGADOR
+
+Criar um serviço central chamado:
+
+`BrowserRuntime`
+
+Responsabilidades:
+
+- Inicializar Playwright.
+- Inicializar Chromium.
+- Manter o processo do navegador ativo durante a operação.
+- Criar contextos independentes.
+- Encerrar contextos individualmente.
+- Recuperar sessões.
+- Gerenciar páginas.
+- Encerrar corretamente o navegador ao fechar a aplicação.
+
+### Arquitetura desejada
+
+```text
+TKS ENGINE
+│
+└── BrowserRuntime
+    │
+    └── Chromium
+        │
+        ├── Contexto Conta 01
+        │   └── TikTok Studio
+        │
+        ├── Contexto Conta 02
+        │   └── TikTok Studio
+        │
+        ├── Contexto Conta 03
+        │   └── TikTok Studio
+        │
+        ├── Contexto Conta 04
+        │   └── TikTok Studio
+        │
+        ├── Contexto Conta 05
+        │   └── TikTok Studio
+        │
+        └── Contexto Conta 06
+            └── TikTok Studio
+```
+
+### Regras obrigatórias
+
+Cada conta deverá possuir:
+
+- Um BrowserContext exclusivo.
+- Uma página independente.
+- Cookies próprios.
+- Estado de navegação próprio.
+- Autenticação independente.
+
+Nunca compartilhar cookies entre contextos.
+
+Nunca reutilizar um contexto autenticado de uma conta para outra.
+
+Não utilizar o perfil pessoal do Chrome.
+
+Não abrir um novo processo Chromium para cada vídeo.
+
+Reutilizar o contexto da conta durante sua fila ativa.
+
+Quando não houver tarefas, permitir encerramento controlado do contexto para economizar memória.
+
+Quando uma nova tarefa chegar, recriar o contexto utilizando as credenciais protegidas pelo DPAPI.
+
+Preservar a possibilidade de recuperação de autenticação.
+
+# 4. GERENCIAMENTO DO EVENT LOOP E PYQT6
+
+A Playwright Async API deverá operar em um ambiente assíncrono consistente.
+
+Antes de implementar, analisar a estrutura atual de `QThread` e `UploadWorker`.
+
+Definir uma estratégia única para o ciclo de vida do Playwright.
+
+Recomendação:
+
+- Um worker dedicado para o runtime.
+- Um event loop assíncrono pertencente a esse worker.
+- Todos os objetos Playwright utilizados nesse loop.
+- Comunicação com a GUI por sinais Qt.
+- Nenhuma manipulação de objetos Playwright em threads externas.
+
+Não compartilhar `Browser`, `BrowserContext` ou `Page` entre threads incompatíveis.
+
+Não bloquear a interface gráfica.
+
+Implementar encerramento gracioso, inclusive quando houver tarefas em andamento.
+
+# 5. CONTEXT REGISTRY
+
+Criar:
+
+`ContextRegistry`
+
+Responsabilidades:
+
+- Registrar contextos ativos.
+- Associar contexto ao `account_id`.
+- Recuperar páginas.
+- Verificar estado do contexto.
+- Impedir criação duplicada para a mesma conta.
+- Encerrar sessões individualmente.
+- Recriar contextos interrompidos.
+
+Estrutura conceitual:
+
+```python
+active_contexts = {
+    "account_id_01": {
+        "browser_context": "...",
+        "page": "...",
+        "status": "ACTIVE"
+    },
+    "account_id_02": {
+        "browser_context": "...",
+        "page": "...",
+        "status": "ACTIVE"
+    }
+}
+```
+
+O exemplo representa a estrutura lógica, não valores reais de autenticação.
+
+Cada contexto deverá ser criado exclusivamente a partir das credenciais protegidas da respectiva conta.
+
+# 6. SQLITE — PERSISTÊNCIA OPERACIONAL
+
+Adicionar SQLite para controlar filas, tarefas, distribuição e execução paralela.
+
+Local:
+
+`%APPDATA%/TKS_Engine/storage/tks_jobs.db`
+
+Preservar o armazenamento JSON atual.
+
+Não migrar todos os históricos antigos.
+
+Não apagar dados existentes.
+
+O SQLite deverá controlar as novas operações.
+
+### Configurações obrigatórias
+
+- Foreign keys habilitadas.
+- WAL.
+- Busy timeout.
+- Transações.
+- Índices.
+- Restrições de unicidade.
+- Migrações versionadas.
+- Backup antes de migrações.
+
+### Tabelas
+
+**departments**
+
+- id
+- name
+- enabled
+- employee_id
+- drawer_id
+- created_at
+- updated_at
+
+**account_assignments**
+
+- id
+- account_id
+- department_id
+- platform
+- round_robin_order
+- enabled
+- created_at
+
+**jobs**
+
+- id
+- department_id
+- account_id
+- drive_file_id
+- filename
+- platform
+- status
+- idempotency_key
+- schedule_time
+- attempt_count
+- error_code
+- error_message
+- created_at
+- updated_at
+
+**round_robin_cursors**
+
+- id
+- department_id
+- platform
+- last_account_id
+- next_position
+- updated_at
+
+**execution_events**
+
+- id
+- job_id
+- account_id
+- department_id
+- event_type
+- created_at
+
+**schema_migrations**
+
+- version
+- applied_at
+
+Criar índices para consultas por:
+
+- account_id
+- department_id
+- status
+- drive_file_id
+- platform
+- created_at
+
+O AccountManager existente continuará sendo a referência dos cadastros e das credenciais das contas.
+
+Não duplicar desnecessariamente os dados de autenticação no SQLite.
+
+O SQLite será a fonte de verdade para os novos jobs, filas, cursores e bloqueios operacionais.
+
+# 7. ROUND-ROBIN — DISTRIBUIÇÃO ALTERNADA
+
+Implementar:
+
+`RoundRobinRouter`
+
+Cada departamento poderá ter várias contas TikTok.
+
+A distribuição deverá ocorrer de forma alternada.
+
+### Exemplo
+
+Departamento 01 possui três contas:
+
+- Conta A
+- Conta B
+- Conta C
+
+Distribuição:
+
+| Vídeo | Conta |
+|---|---|
+| Vídeo 01 | A |
+| Vídeo 02 | B |
+| Vídeo 03 | C |
+| Vídeo 04 | A |
+| Vídeo 05 | B |
+| Vídeo 06 | C |
+
+### Regras fundamentais
+
+1. Cada vídeo será atribuído a uma única conta TikTok.
+2. Nunca encaminhar automaticamente o mesmo vídeo para todas as contas.
+3. Cada departamento terá seu próprio cursor.
+4. A rotação deverá sobreviver a reinicializações.
+5. Contas desativadas não poderão receber tarefas.
+6. Contas não autenticadas deverão ser ignoradas temporariamente.
+7. Contas com tarefas em andamento não poderão receber outra tarefa simultânea.
+8. Se todas estiverem indisponíveis, manter o vídeo aguardando.
+9. Não transferir automaticamente uma tarefa já atribuída após uma falha de submissão.
+
+A seleção da conta e a atualização do cursor deverão acontecer dentro de uma transação SQLite.
+
+Isso impedirá duas tarefas simultâneas de receberem a mesma posição da rotação.
+
+### Importante
+
+A lista de contas deverá ser obtida do AccountManager.
+
+Não codificar nomes de usuários diretamente.
+
+Não presumir que existe somente uma conta por departamento.
+
+Permitir que o usuário associe várias contas ao mesmo departamento pela interface.
+
+Preservar as associações atuais, tornando a ordem de distribuição configurável.
+
+# 8. QUEUE MANAGER
+
+Criar:
+
+`QueueManager`
+
+Responsabilidades:
+
+- Receber novos vídeos.
+- Consultar o departamento.
+- Identificar contas elegíveis.
+- Solicitar seleção Round-Robin.
+- Criar jobs.
+- Persistir tarefas.
+- Controlar pendências.
+- Evitar duplicidade.
+- Recuperar filas após reinicialização.
+
+### Idempotência
+
+Utilizar chave:
+
+`drive_file_id + platform + account_id + operation`
+
+Se o mesmo arquivo for detectado novamente, não criar uma tarefa duplicada para a mesma conta.
+
+Cada tarefa deverá possuir um identificador único.
+
+### Estados
+
+Utilizar:
+
+- RECEIVED
+- QUEUED
+- ASSIGNED
+- RUNNING
+- UPLOADING
+- PROCESSING
+- SUBMITTING
+- SCHEDULED
+- PUBLISHED
+- FAILED
+- UNKNOWN
+- REAUTH_REQUIRED
+
+Não alterar o significado dos estados já existentes sem adaptação de compatibilidade.
+
+# 9. EXECUTION COORDINATOR — PARALELISMO
+
+Criar:
+
+`ExecutionCoordinator`
+
+Configuração inicial:
+
+```python
+MAX_CONCURRENT_ACCOUNT_JOBS = 2
+MAX_JOBS_PER_ACCOUNT = 1
+```
+
+A arquitetura deverá suportar expansão futura por configuração.
+
+### Funcionamento
+
+Se seis departamentos tiverem tarefas disponíveis, o coordenador deverá:
+
+1. Consultar as filas.
+2. Selecionar departamentos elegíveis.
+3. Evitar que um único departamento monopolize a execução.
+4. Selecionar contas livres.
+5. Respeitar o Round-Robin.
+6. Iniciar no máximo duas contas simultaneamente.
+7. Atualizar os estados.
+8. Liberar vagas após conclusão.
+
+### Regras obrigatórias
+
+- Máximo de duas operações simultâneas.
+- Uma tarefa ativa por conta.
+- Uma conta não poderá ter dois workers manipulando sua sessão.
+- Falha em uma conta não poderá cancelar a outra.
+- Pausa individual por conta.
+- Pausa individual por departamento.
+- Pause global.
+- Resume global.
+- Stop controlado.
+- Recuperação de operações interrompidas.
+
+Utilizar:
+
+- `asyncio.Semaphore`.
+- `asyncio.Lock`.
+- Filas assíncronas.
+- Transações SQLite.
+
+Os locks deverão pertencer ao mesmo event loop do Playwright.
+
+Não utilizar locks locais como substitutos da persistência transacional.
+
+# 10. ACCOUNT EXECUTOR
+
+Criar:
+
+`AccountExecutor`
+
+Ele será responsável por executar uma tarefa dentro do contexto da conta selecionada.
+
+Nesta fase, deverá possuir:
+
+- Inicialização do contexto.
+- Validação da identidade.
+- Abertura do TikTok Studio.
+- Preparação da página.
+- Verificação de disponibilidade.
+- Encerramento controlado.
+
+Preparar uma interface de execução que futuramente receberá o Uploader atual.
+
+Não reimplementar o pipeline de publicação.
+
+Não modificar desnecessariamente o DOMHandler.
+
+Não executar uploads reais nesta etapa.
+
+O objetivo é validar o gerenciamento de sessões e a distribuição paralela.
+
+# 11. ISOLAMENTO E RECUPERAÇÃO
+
+### Falha de uma conta
+
+Se a Conta A perder a autenticação:
+
+- Marcar `REAUTH_REQUIRED`.
+- Pausar somente a Conta A.
+- Preservar sua fila.
+- Liberar a vaga de concorrência.
+- Manter as demais contas operacionais.
+
+### Falha de um contexto
+
+- Encerrar somente o contexto afetado.
+- Registrar o erro.
+- Recuperar a sessão quando possível.
+- Validar a identidade novamente.
+
+### Falha do Chromium
+
+- Identificar que o processo principal caiu.
+- Suspender novas operações.
+- Classificar tarefas interrompidas.
+- Reinicializar o BrowserRuntime.
+- Recriar contextos necessários.
+- Preservar o estado das filas.
+
+Se a submissão já tiver sido iniciada, mas não houver confirmação, classificar como `UNKNOWN`.
+
+Não repetir automaticamente essa publicação.
+
+### Reinicialização da aplicação
+
+Ao abrir a TKS Engine:
+
+1. Carregar as contas.
+2. Carregar departamentos.
+3. Carregar filas SQLite.
+4. Recuperar cursores Round-Robin.
+5. Identificar tarefas interrompidas.
+6. Classificar operações em andamento.
+7. Recuperar contextos sob demanda.
+8. Retomar somente operações seguras.
+
+# 12. INTEGRAÇÃO COM A INTERFACE PYQT6
+
+Preservar a interface atual.
+
+Adicionar, se necessário, uma seção denominada:
+
+**CENTRAL DE EXECUÇÃO MULTIACCOUNT**
+
+Mostrar:
+
+- Contas cadastradas.
+- Contas autenticadas.
+- Contextos ativos.
+- Contas em execução.
+- Filas pendentes.
+- Concorrência atual.
+- Limite máximo.
+- Departamentos ativos.
+- Última conta selecionada por departamento.
+
+Criar indicadores visuais:
+
+- Disponível.
+- Em execução.
+- Aguardando.
+- Pausada.
+- Autenticação necessária.
+- Falha.
+
+Adicionar controles:
+
+- Iniciar.
+- Pausar.
+- Retomar.
+- Parar.
+- Testar conta.
+- Testar isolamento.
+
+Não substituir a interface existente.
+
+Manter o padrão visual da TKS Engine 2.0/3.0.
+
+# 13. INTEGRAÇÃO COM TKS VIRTUAL OFFICE
+
+Nesta fase, preparar a comunicação operacional sem modificar a aparência dos personagens.
+
+Reutilizar o protocolo existente entre Engine e Virtual Office.
+
+Se necessário, preparar eventos:
+
+```text
+account.context_created
+account.context_closed
+account.session_validated
+account.reauth_required
+department.queue_updated
+department.task_assigned
+execution.started
+execution.paused
+execution.resumed
+execution.completed
+execution.failed
+```
+
+Cada evento deverá possuir:
+
+- event_id
+- timestamp
+- account_id
+- department_id
+- job_id
+- status
+
+Não transmitir cookies ou dados sensíveis.
+
+Não criar animações fictícias.
+
+A integração visual completa será validada na etapa posterior.
+
+# 14. TESTES OBRIGATÓRIOS
+
+## Teste A — BrowserRuntime
+
+Inicializar um único Chromium.
+
+Criar dois contextos independentes.
+
+Verificar que ambos podem operar simultaneamente.
+
+## Teste B — Isolamento
+
+Utilizar duas contas diferentes.
+
+Confirmar que cada contexto identifica exclusivamente sua conta.
+
+## Teste C — Round-Robin
+
+Com três contas no mesmo departamento:
+
+Vídeo 01 → A  
+Vídeo 02 → B  
+Vídeo 03 → C  
+Vídeo 04 → A  
+Vídeo 05 → B  
+Vídeo 06 → C
+
+## Teste D — Persistência
+
+Encerrar e reiniciar a aplicação.
+
+Confirmar que o próximo destino da rotação permanece correto.
+
+## Teste E — Conta indisponível
+
+Desativar uma conta.
+
+Confirmar que ela não recebe novas tarefas e que a rotação continua entre as contas elegíveis.
+
+## Teste F — Concorrência
+
+Criar seis tarefas simuladas.
+
+Confirmar que no máximo duas contas trabalham simultaneamente.
+
+## Teste G — Exclusividade por conta
+
+Tentar inserir duas tarefas simultâneas na mesma conta.
+
+Confirmar que somente uma executa.
+
+## Teste H — Falhas independentes
+
+Simular falha em uma conta.
+
+Confirmar que a outra continua normalmente.
+
+## Teste I — Idempotência
+
+Detectar o mesmo arquivo duas vezes.
+
+Confirmar que não há tarefas duplicadas.
+
+## Teste J — Reinicialização
+
+Interromper a aplicação e recuperar as filas.
+
+Confirmar integridade dos dados.
+
+## Teste K — Regressão
+
+Executar os testes da Fase 1.
+
+Executar a suite completa de regressão.
+
+Confirmar que o sistema anterior continua funcional.
+
+**TODOS OS TESTES DESTA FASE DEVEM SER REALIZADOS SEM PUBLICAÇÕES REAIS.**
+
+Utilizar mocks e tarefas simuladas para validar o coordenador.
+
+# 15. REGRAS DE PRESERVAÇÃO
+
+- Não modificar a modelagem dos seis personagens.
+- Não reorganizar as seis mesas.
+- Não alterar as seis gavetas.
+- Não apagar contas existentes.
+- Não remover cookies criptografados.
+- Não apagar históricos.
+- Não sobrescrever configurações.
+- Não reconstruir o projeto.
+- Não substituir o UploadWorker sem necessidade técnica.
+- Não implementar integração Duonick nesta fase.
+- Não ativar publicações automáticas.
+- Não aumentar a concorrência inicial.
+- Não inserir cookies no código ou logs.
+
+Toda alteração deverá ser incremental e acompanhada de testes.
+
+# 16. CRITÉRIOS DE ACEITAÇÃO
+
+A Fase 2 somente será considerada concluída quando:
+
+1. BrowserRuntime funcionar.
+2. Chromium puder ser reutilizado.
+3. Contextos forem independentes.
+4. As seis contas existentes forem preservadas.
+5. Um departamento aceitar várias contas.
+6. Round-Robin funcionar.
+7. Cursores persistirem.
+8. SQLite funcionar.
+9. Duas contas executarem simultaneamente em testes controlados.
+10. Não houver duas tarefas simultâneas na mesma conta.
+11. Falhas forem isoladas.
+12. Filas forem recuperadas.
+13. A interface continuar responsiva.
+14. Todos os testes de regressão forem aprovados.
+15. Nenhuma publicação real tiver sido disparada.
+
+# 17. ENTREGA FINAL
+
+Criar um relatório:
+
+`tks_multiaccount_phase2_relatorio.md`
+
+Informar:
+
+- Arquivos criados.
+- Arquivos modificados.
+- Arquitetura implementada.
+- Funcionamento do BrowserRuntime.
+- Funcionamento dos contextos.
+- Estrutura SQLite.
+- Resultado Round-Robin.
+- Testes de concorrência.
+- Testes de isolamento.
+- Testes de recuperação.
+- Resultados da regressão.
+- Limitações encontradas.
+- Próxima fase recomendada.
+
+Não afirmar que algo foi testado se não foi executado.
+
+Não ocultar falhas.
+
+# DIRETRIZ FINAL
+
+A TKS Engine deverá evoluir para um sistema Multiaccount capaz de gerenciar dezenas de contas, mantendo sessões independentes, filas persistentes e execução paralela controlada.
+
+**Configuração inicial: duas contas simultâneas.**
+
+**Regra definitiva: um vídeo, uma conta por plataforma, com distribuição alternada Round-Robin.**
+
+Implementar somente a infraestrutura desta fase.
+
+Não disparar publicações reais.
+
+Não reconstruir componentes funcionais.
+
+**INICIAR PELA AUDITORIA DA FASE 1 E IMPLEMENTAR A FASE 2 DE FORMA INCREMENTAL.**
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-11-23T09:43:06-03:00.
+
+The user's current state is as follows:
+Other open documents:
+- e:\youtube\APPS CURSOR\AAALEKLEK\tks-engine\core\dom_handler.py (LANGUAGE_UNSPECIFIED)
+- e:\youtube\APPS CURSOR\AAALEKLEK\tks-engine\.gitignore (LANGUAGE_UNSPECIFIED)
+- e:\youtube\APPS CURSOR\AAALEKLEK\tks-engine\gui\tables\accounts_table.py (LANGUAGE_UNSPECIFIED)
+- e:\youtube\APPS CURSOR\AAALEKLEK\tks-engine\core\cookie_manager.py (LANGUAGE_UNSPECIFIED)
+- e:\youtube\APPS CURSOR\TKS-Virtual-Office\src\components\3d\characters\employee\SittingAnchors.ts (LANGUAGE_UNSPECIFIED)
+</ADDITIONAL_METADATA>

@@ -1,44 +1,43 @@
+"""Accounts management table widget for TKS Engine multiaccount system."""
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidget, QWidget
 
 
 class AccountsTable(QTableWidget):
-  """Table used for account management.
+    """Table used for multiaccount management matching Section 9 specs.
 
-  :param parent: Parent widget.
-  :return: None
-  """
-
-  def __init__(self, parent: QWidget | None = None) -> None:
-    """Initialize the accounts table.
-
-    :param parent: Parent widget.
-    :return: None
+    Columns:
+    0: Conta (ex: Conta TikTok 01)
+    1: Usuário (ex: @username ou Pendente)
+    2: Autenticação (Status badge)
+    3: Departamento (ex: TikTok Shop, Não atribuído)
+    4: Ações (Testar, Depto, Editar, Remover)
     """
-    super().__init__(parent)
-    self.setProperty("class", "grid-table")
-    self.setColumnCount(6)
-    self.setHorizontalHeaderLabels([
-      "#",
-      "Username",
-      "Date Added",
-      "Last Used",
-      "Status",
-      "Actions",
-    ])
-    self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-    self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-    self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-    self.setShowGrid(True)
-    self.viewport().setAutoFillBackground(True)
-    self.verticalHeader().setVisible(False)
-    self.verticalHeader().setDefaultSectionSize(58)
-    self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-    self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-    self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-    self.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-    self.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-    self.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-    self.setColumnWidth(5, 132)
-    self.setColumnWidth(4, 100)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("class", "grid-table")
+        self.setColumnCount(5)
+        self.setHorizontalHeaderLabels([
+            "Conta",
+            "Usuário",
+            "Autenticação",
+            "Departamento",
+            "Ações",
+        ])
+        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setShowGrid(True)
+        self.viewport().setAutoFillBackground(True)
+        self.verticalHeader().setVisible(False)
+        self.verticalHeader().setDefaultSectionSize(54)
+
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.setColumnWidth(4, 210)

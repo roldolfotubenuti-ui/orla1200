@@ -219,6 +219,9 @@ class ExecutorPage(PageLayout):
     controls_layout.addWidget(self.headless_check)
     self.retry_check = QCheckBox("Retry failures")
     controls_layout.addWidget(self.retry_check)
+    self.prefix_caption_check = QCheckBox("Add 'Cre: <videoid>' prefix to caption")
+    self.prefix_caption_check.setChecked(False)
+    controls_layout.addWidget(self.prefix_caption_check)
     controls_layout.addStretch(1)
     top_row.addWidget(controls_card, 3)
 

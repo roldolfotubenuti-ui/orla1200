@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 from dateutil.relativedelta import relativedelta
 
 from core.config_manager import ConfigManager
@@ -26,9 +27,10 @@ class ScheduleRuleEngine:
     :param config: ConfigManager providing rule parameters.
     :type config: ConfigManager
     """
-    self._min_offset_minutes: int = config.min_offset_minutes
-    self._max_offset_months: int = config.max_offset_months
-    self._minute_step: int = config.minute_step
+    self._min_offset_minutes: int = getattr(config, "min_offset_minutes", 30)
+    self._max_offset_days: int = getattr(config, "max_offset_days", 10)
+    self._max_offset_months: int = getattr(config, "max_offset_months", 1)
+    self._minute_step: int = getattr(config, "minute_step", 5)
 
   # ------------------------------------------------------------------
   # Properties
@@ -42,6 +44,15 @@ class ScheduleRuleEngine:
     :rtype: int
     """
     return self._min_offset_minutes
+
+  @property
+  def max_offset_days(self) -> int:
+    """
+    Maximum future offset in days (TikTok limit: 10 days).
+
+    :rtype: int
+    """
+    return self._max_offset_days
 
   @property
   def max_offset_months(self) -> int:
@@ -84,17 +95,16 @@ class ScheduleRuleEngine:
     """
     Latest allowed schedule timestamp.
 
-    Uses a **calendar month** offset (``relativedelta``), not a fixed
-    day count.  E.g. Feb 17 + 1 month = Mar 17.
+    TikTok officially limits scheduling to 10 days in advance.
 
     :param now: Reference time (defaults to ``datetime.now()``).
     :type now: datetime | None
-    :return: ``now + max_offset_months`` (calendar months).
+    :return: ``now + max_offset_days`` (days).
     :rtype: datetime
     """
     if now is None:
       now = datetime.now()
-    return now + relativedelta(months=self._max_offset_months)
+    return now + timedelta(days=self._max_offset_days)
 
   # ------------------------------------------------------------------
   # Validation
@@ -145,7 +155,7 @@ class ScheduleRuleEngine:
     if dt > max_dt:
       return (
         False,
-        f"Too late: must be within {self._max_offset_months} month(s) "
+        f"Too late: must be within {self._max_offset_days} day(s) "
         f"(latest: {max_dt.strftime('%Y-%m-%d %H:%M')})",
       )
 
@@ -202,7 +212,7 @@ class ScheduleRuleEngine:
         False,
         f"Start date exceeds maximum allowed "
         f"({max_dt.strftime('%Y-%m-%d')}). "
-        f"Scheduling is limited to {self._max_offset_months} month(s) from now.",
+        f"Scheduling is limited to {self._max_offset_days} day(s) from now.",
       )
 
     if end.date() > max_dt.date():
@@ -210,7 +220,7 @@ class ScheduleRuleEngine:
         False,
         f"End date {end.strftime('%Y-%m-%d')} exceeds the maximum "
         f"allowed date {max_dt.strftime('%Y-%m-%d')}. "
-        f"Scheduling is limited to {self._max_offset_months} month(s) from now.",
+        f"Scheduling is limited to {self._max_offset_days} day(s) from now.",
       )
 
     return (True, "Valid")
@@ -343,3 +353,187 @@ class ScheduleRuleEngine:
       return []
 
     return all_minutes
+
+  # ------------------------------------------------------------------
+  # Queue Pre-Validation and Smart Recalculation (Phase 2.5)
+  # ------------------------------------------------------------------
+
+  def inspect_queue(
+    self,
+    tasks: list[Any],
+    now: datetime | None = None,
+    min_interval_minutes: int = 5,
+  ) -> dict[str, Any]:
+    """
+    Inspect an entire queue of upload tasks before browser launch.
+
+    Detects:
+    - Expired times (< now)
+    - Insufficient lead time (< min_allowed_datetime)
+    - Duplicate times
+    - Intervals between consecutive posts (< min_interval_minutes)
+    - Times exceeding the 10-day TikTok limit (> max_allowed_datetime)
+    - Immediate posts (schedule_time is None)
+
+    :param tasks: List of UploadTask objects.
+    :param now: Reference datetime (defaults to datetime.now()).
+    :param min_interval_minutes: Minimum minutes required between posts.
+    :return: Dictionary containing inspection metrics and status (is_valid: bool).
+    """
+    if now is None:
+      now = datetime.now()
+
+    min_dt = self.min_allowed_datetime(now)
+    max_dt = self.max_allowed_datetime(now)
+
+    issues: list[dict[str, Any]] = []
+    seen_times: dict[datetime, str] = {}
+    last_scheduled_time: datetime | None = None
+
+    for i, t in enumerate(tasks):
+      fn = getattr(getattr(t, "file_path", None), "name", f"video_{i+1}")
+      sched = getattr(t, "schedule_time", None)
+
+      if sched is None:
+        # Immediate publication - always valid in terms of schedule
+        continue
+
+      # Check 1: Expired or insufficient lead time (< min_dt)
+      if sched < min_dt:
+        issues.append({
+          "index": i,
+          "filename": fn,
+          "schedule_time": sched,
+          "issue_type": "expired" if sched < now else "insufficient_lead",
+          "reason": (
+            f"Horário ({sched.strftime('%d/%m %H:%M')}) é anterior à antecedência mínima "
+            f"permitida ({min_dt.strftime('%d/%m %H:%M')})"
+          ),
+        })
+        continue
+
+      # Check 2: Beyond max allowed (10 days)
+      if sched > max_dt:
+        issues.append({
+          "index": i,
+          "filename": fn,
+          "schedule_time": sched,
+          "issue_type": "exceeded_max",
+          "reason": (
+            f"Horário ({sched.strftime('%d/%m %H:%M')}) excede o limite máximo de "
+            f"{self._max_offset_days} dias do TikTok (limite: {max_dt.strftime('%d/%m %H:%M')})"
+          ),
+        })
+        continue
+
+      # Check 3: Minute granularity
+      if sched.minute % self._minute_step != 0:
+        issues.append({
+          "index": i,
+          "filename": fn,
+          "schedule_time": sched,
+          "issue_type": "invalid_minute_step",
+          "reason": f"Minutos ({sched.minute:02d}) devem ser múltiplos de {self._minute_step}",
+        })
+        continue
+
+      # Check 4: Duplicate times
+      if sched in seen_times:
+        issues.append({
+          "index": i,
+          "filename": fn,
+          "schedule_time": sched,
+          "issue_type": "duplicate",
+          "reason": f"Horário idêntico ao de {seen_times[sched]} ({sched.strftime('%d/%m %H:%M')})",
+        })
+      else:
+        seen_times[sched] = fn
+
+      # Check 5: Interval between consecutive scheduled posts
+      if last_scheduled_time is not None:
+        gap = (sched - last_scheduled_time).total_seconds() / 60
+        if 0 < gap < min_interval_minutes:
+          issues.append({
+            "index": i,
+            "filename": fn,
+            "schedule_time": sched,
+            "issue_type": "interval_too_short",
+            "reason": (
+              f"Intervalo de {int(gap)} min em relação ao vídeo anterior é menor que o "
+              f"mínimo de {min_interval_minutes} min"
+            ),
+          })
+      last_scheduled_time = sched
+
+    return {
+      "is_valid": len(issues) == 0,
+      "total_tasks": len(tasks),
+      "scheduled_count": sum(1 for t in tasks if getattr(t, "schedule_time", None) is not None),
+      "immediate_count": sum(1 for t in tasks if getattr(t, "schedule_time", None) is None),
+      "issues": issues,
+    }
+
+  def recalculate_schedule_queue(
+    self,
+    tasks: list[Any],
+    interval_minutes: int = 30,
+    now: datetime | None = None,
+  ) -> list[dict[str, Any]]:
+    """
+    Generate a new valid, non-colliding, sequential schedule for all scheduled tasks.
+    Preserves immediate posts (schedule_time is None) and video order.
+
+    :param tasks: List of tasks.
+    :param interval_minutes: Interval in minutes between consecutive scheduled posts.
+    :param now: Reference datetime.
+    :return: List of dicts with {index, task, filename, old_schedule, new_schedule, changed, reason}.
+    """
+    if now is None:
+      now = datetime.now()
+
+    interval_minutes = max(self._minute_step, interval_minutes)
+    current_slot = self.min_allowed_datetime(now)
+    max_dt = self.max_allowed_datetime(now)
+
+    recalculated: list[dict[str, Any]] = []
+
+    for i, t in enumerate(tasks):
+      fn = getattr(getattr(t, "file_path", None), "name", f"video_{i+1}")
+      old_sched = getattr(t, "schedule_time", None)
+
+      if old_sched is None:
+        recalculated.append({
+          "index": i,
+          "task": t,
+          "filename": fn,
+          "old_schedule": None,
+          "new_schedule": None,
+          "changed": False,
+          "reason": "Publicação imediata",
+        })
+        continue
+
+      new_slot = current_slot
+      if new_slot > max_dt:
+        new_slot = max_dt
+
+      reason_parts = []
+      if old_sched < self.min_allowed_datetime(now):
+        reason_parts.append("Vencido/antecedência insuficiente")
+      if old_sched > max_dt:
+        reason_parts.append(f"Excedia {self._max_offset_days} dias")
+
+      recalculated.append({
+        "index": i,
+        "task": t,
+        "filename": fn,
+        "old_schedule": old_sched,
+        "new_schedule": new_slot,
+        "changed": old_sched != new_slot,
+        "reason": " / ".join(reason_parts) if reason_parts else "Ajuste sequencial de intervalo",
+      })
+
+      current_slot = new_slot + timedelta(minutes=interval_minutes)
+      current_slot = self.round_minute_up(current_slot)
+
+    return recalculated

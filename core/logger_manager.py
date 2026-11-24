@@ -90,11 +90,21 @@ class LoggerManager:
     self._callback_handler: _CallbackHandler | None = None
 
     # Prevent duplicate handlers on re-initialization
-    if not self._logger.handlers:
+    has_stream = any(
+      isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler)
+      for h in self._logger.handlers
+    )
+    if not has_stream:
       self._setup_console_handler()
 
     if log_file is not None:
-      self._setup_file_handler(log_file)
+      target_file = str(log_file.resolve())
+      has_file = any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == target_file
+        for h in self._logger.handlers
+      )
+      if not has_file:
+        self._setup_file_handler(log_file)
 
   def _setup_console_handler(self) -> None:
     """
@@ -197,7 +207,7 @@ class LoggerManager:
     self._callback_handler = _CallbackHandler(callback)
     formatter = logging.Formatter(
       fmt="%(asctime)s %(levelname)-8s %(message)s",
-      datefmt="%H:%M:%S",
+      datefmt="%Y-%m-%d %H:%M:%S",
     )
     self._callback_handler.setFormatter(formatter)
     self._logger.addHandler(self._callback_handler)

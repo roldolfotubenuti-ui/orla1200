@@ -56,67 +56,77 @@ class DateTimeUtils:
   @staticmethod
   def max_allowed_datetime(
     now: datetime | None = None,
-    months: int = 1,
+    max_offset_days: int = 10,
+    months: int | None = None,
   ) -> datetime:
     """
-    Compute the latest allowed schedule datetime using a **calendar
-    month** offset (not a fixed day count).
+    Compute the latest allowed schedule datetime for TikTok Studio.
+    TikTok officially limits scheduling to 10 days in advance.
 
     :param now: Reference time (defaults to ``datetime.now()``).
     :type now: datetime | None
-    :param months: Number of calendar months to add.
-    :type months: int
-    :return: ``now + months`` (calendar).
+    :param max_offset_days: Number of days allowed (defaults to 10).
+    :type max_offset_days: int
+    :param months: Legacy parameter for backward compatibility.
+    :type months: int | None
+    :return: Maximum allowed datetime.
     :rtype: datetime
     """
     if now is None:
       now = datetime.now()
-    return now + relativedelta(months=months)
+    if months is not None and max_offset_days == 10:
+      # If caller explicitly passed months and not days
+      return now + relativedelta(months=months)
+    return now + timedelta(days=max_offset_days)
 
   @staticmethod
   def is_valid_schedule_time(
     dt: datetime,
-    min_offset_minutes: int = 15,
-    max_offset_months: int = 1,
+    min_offset_minutes: int = 30,
+    max_offset_days: int = 10,
+    max_offset_months: int | None = None,
   ) -> bool:
     """
     Check if a datetime falls within the valid scheduling window.
 
-    Uses calendar-month arithmetic for the upper bound.
+    TikTok allows scheduling between 15-30 min buffer and up to 10 days ahead.
 
     :param dt: The datetime to validate.
     :type dt: datetime
     :param min_offset_minutes: Minimum future offset in minutes.
     :type min_offset_minutes: int
-    :param max_offset_months: Maximum future offset in calendar months.
-    :type max_offset_months: int
+    :param max_offset_days: Maximum future offset in days (default 10).
+    :type max_offset_days: int
+    :param max_offset_months: Legacy parameter for backward compatibility.
+    :type max_offset_months: int | None
     :return: True if the time is within the valid scheduling window.
     :rtype: bool
     """
     now = datetime.now()
     min_time = now + timedelta(minutes=min_offset_minutes)
-    max_time = now + relativedelta(months=max_offset_months)
+    if max_offset_months is not None and max_offset_days == 10:
+      max_time = now + relativedelta(months=max_offset_months)
+    else:
+      max_time = now + timedelta(days=max_offset_days)
     return min_time <= dt <= max_time
 
   @staticmethod
   def clamp_to_schedule_window(
     dt: datetime,
-    min_offset_minutes: int = 15,
-    max_offset_months: int = 1,
+    min_offset_minutes: int = 30,
+    max_offset_days: int = 10,
+    max_offset_months: int | None = None,
     step: int = 5,
   ) -> datetime:
     """
     Force a datetime into the valid scheduling range.
 
-    Uses calendar-month arithmetic for the upper bound and rounds to
-    the nearest minute step.
-
     :param dt: The datetime to clamp.
     :type dt: datetime
     :param min_offset_minutes: Minimum future offset in minutes.
     :type min_offset_minutes: int
-    :param max_offset_months: Maximum future offset in calendar months.
-    :type max_offset_months: int
+    :param max_offset_days: Maximum future offset in days.
+    :type max_offset_days: int
     :param step: Minute granularity.
     :type step: int
     :return: A clamped and rounded datetime.
@@ -124,7 +134,10 @@ class DateTimeUtils:
     """
     now = datetime.now()
     min_time = now + timedelta(minutes=min_offset_minutes)
-    max_time = now + relativedelta(months=max_offset_months)
+    if max_offset_months is not None and max_offset_days == 10:
+      max_time = now + relativedelta(months=max_offset_months)
+    else:
+      max_time = now + timedelta(days=max_offset_days)
 
     if dt < min_time:
       dt = min_time

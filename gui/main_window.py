@@ -1,55 +1,73 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import QSize, pyqtSignal
 from PyQt6.QtGui import QTextCursor
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import (
+  QDialog,
+  QMainWindow,
+  QStackedWidget,
+  QTabWidget,
+  QVBoxLayout,
+  QWidget,
+)
 
-from gui.pages import AccountsPage, ExecutorPage, FoldersPage, SettingsPage
+from gui.dialogs import LogsDialog
+from gui.pages import (
+  AccountsPage,
+  ConfigWizardPage,
+  ExecutionWizardPage,
+  FoldersPage,
+  ReviewWizardPage,
+  SettingsPage,
+  TikTokStudioPage,
+  VideosWizardPage,
+)
 from gui.theme.manager import ThemeManager
+from gui.widgets.wizard_stepper import WizardStepperBar
 
 
 class MainWindow(QMainWindow):
-  """Main application window with top-aligned tabs.
+  """Main application window structured as a 5-step guided SaaS Wizard.
 
-  :param theme_manager: Shared theme manager.
-  :param parent: Parent widget.
-  :return: None
+  Steps:
+  0 - CONTA (AccountsPage)
+  1 - VÍDEOS (VideosWizardPage)
+  2 - CONFIGURAÇÃO (ConfigWizardPage)
+  3 - REVISÃO (ReviewWizardPage)
+  4 - PUBLICAÇÃO (ExecutionWizardPage)
   """
 
   WINDOW_TITLE = "TikTok Scheduler"
 
   _log_signal = pyqtSignal(str, int)
+  wizard_step_changed = pyqtSignal(int)
 
   def __init__(
     self,
     theme_manager: ThemeManager,
     parent: QWidget | None = None,
   ) -> None:
-    """Initialize the main window.
-
-    :param theme_manager: Shared theme manager.
-    :param parent: Parent widget.
-    :return: None
-    """
     super().__init__(parent)
     self._theme_manager = theme_manager
     self._page_order: list[tuple[str, QWidget, str, str]] = []
     self._locked_normal_size: QSize | None = None
     self._restoring_locked_size = False
+    self._log_file_path: Path | None = None
+    self._session_logs: list[tuple[str, int]] = []
+    self._logs_dialog: LogsDialog | None = None
+    self._settings_dialog: QDialog | None = None
     self._log_signal.connect(self._do_append_log)
 
     self.setWindowTitle(self.WINDOW_TITLE)
     self._build_ui()
     self._expose_controller_aliases()
     self._bind_theme_controls()
-    self._set_current_page("main")
+    self.set_wizard_step(0)
     self._apply_theme_state()
 
   def _build_ui(self) -> None:
-    """Build the tab-based application shell.
-
-    :return: None
-    """
     central = QWidget()
     central.setObjectName("main-central")
     self.setCentralWidget(central)
@@ -58,111 +76,121 @@ class MainWindow(QMainWindow):
     root_layout.setContentsMargins(0, 0, 0, 0)
     root_layout.setSpacing(0)
 
+    icon_color = self._theme_manager.palette.accent
+    self.stepper_bar = WizardStepperBar(accent_color=icon_color, parent=central)
+    root_layout.addWidget(self.stepper_bar)
+
+    self.wizard_stack = QStackedWidget(central)
+    root_layout.addWidget(self.wizard_stack, 1)
+
+    # Hidden QTabWidget shim for any legacy code referencing self.tab_widget
     self.tab_widget = QTabWidget()
-    self.tab_widget.setProperty("class", "workspace-tabs")
-    self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
-    self.tab_widget.setDocumentMode(False)
-    self.tab_widget.setMovable(False)
-    self.tab_widget.setUsesScrollButtons(True)
-    self.tab_widget.tabBar().setExpanding(False)
-    self.tab_widget.currentChanged.connect(self._on_tab_changed)
-    root_layout.addWidget(self.tab_widget, 1)
+    self.tab_widget.hide()
 
     self._build_pages()
 
   def lock_normal_size(self, size: QSize) -> None:
-    """Lock the normal window size while still allowing maximize/fullscreen.
-
-    :param size: Normal window size.
-    :return: None
-    """
-    self._locked_normal_size = QSize(size)
-
-  def resizeEvent(self, event) -> None:  # noqa: N802
-    """Prevent manual resizing in the normal window state.
-
-    :param event: Resize event.
-    :return: None
-    """
-    super().resizeEvent(event)
-    if self._restoring_locked_size:
-      return
-    if self._locked_normal_size is None:
-      return
-    if self.isMaximized() or self.isFullScreen():
-      return
-    if event.size() == self._locked_normal_size:
-      return
-
-    self._restoring_locked_size = True
-    self.resize(self._locked_normal_size)
-    self._restoring_locked_size = False
+    # Kept for backward compatibility; windows are freely resizable per desktop guidelines
+    self._locked_normal_size = None
 
   def _build_pages(self) -> None:
-    """Create page widgets and register top tabs.
-
-    :return: None
-    """
     icon_color = self._theme_manager.palette.accent
-    self.executor_page = ExecutorPage(icon_color, self._theme_manager.palette)
     self.accounts_page = AccountsPage(icon_color)
+    self.studio_page = TikTokStudioPage()
+    self.executor_page = ExecutionWizardPage(icon_color, self._theme_manager.palette)
+
+    # Auxiliary pages kept for backward compatibility and mixin references
+    self.videos_page = VideosWizardPage(icon_color)
+    self.config_page = ConfigWizardPage(icon_color)
+    self.review_page = ReviewWizardPage(icon_color)
     self.folders_page = FoldersPage(icon_color)
     self.settings_page = SettingsPage(icon_color)
 
-    self._register_page("main", self.executor_page, ExecutorPage.TITLE, ExecutorPage.DESCRIPTION, "Main")
-    self._register_page("accounts", self.accounts_page, AccountsPage.TITLE, AccountsPage.DESCRIPTION, "Accounts")
-    self._register_page("folders", self.folders_page, FoldersPage.TITLE, FoldersPage.DESCRIPTION, "Folders")
-    self._register_page("settings", self.settings_page, SettingsPage.TITLE, SettingsPage.DESCRIPTION, "Settings")
+    self._register_wizard_page("accounts", self.accounts_page, AccountsPage.TITLE, AccountsPage.DESCRIPTION)
+    self._register_wizard_page("studio", self.studio_page, "2. Estúdio TikTok", "Carregar e agendar publicações")
+    self._register_wizard_page("main", self.executor_page, ExecutionWizardPage.TITLE, ExecutionWizardPage.DESCRIPTION)
 
-  def _register_page(
+  def _register_wizard_page(
     self,
     key: str,
     page: QWidget,
     title: str,
     description: str,
-    tab_label: str,
   ) -> None:
-    """Register a page with the top tab widget.
-
-    :param key: Stable page key.
-    :param page: Page widget.
-    :param title: Page title.
-    :param description: Page description.
-    :param tab_label: Visible tab label.
-    :return: None
-    """
     self._page_order.append((key, page, title, description))
-    self.tab_widget.addTab(page, tab_label)
+    self.wizard_stack.addWidget(page)
+
+  def set_wizard_step(self, step_index: int) -> None:
+    """Switch active wizard page (0..4) and update the top progress stepper."""
+    if not (0 <= step_index < self.wizard_stack.count()):
+      return
+    self.wizard_stack.setCurrentIndex(step_index)
+    _key, _page, title, _desc = self._page_order[step_index]
+
+    # In Studio step, the TikTok Studio header & sidebar provide full navigation
+    if _key == "studio":
+      self.stepper_bar.setVisible(False)
+    else:
+      self.stepper_bar.setVisible(True)
+      self.stepper_bar.set_current_step(step_index)
+
+    self.setWindowTitle(f"{self.WINDOW_TITLE} — {title}")
+    self.wizard_step_changed.emit(step_index)
+
+  def current_wizard_step(self) -> int:
+    return self.wizard_stack.currentIndex()
+
+  def _set_current_page(self, key: str) -> None:
+    for index, (page_key, _page, _title, _description) in enumerate(self._page_order):
+      if page_key == key:
+        self.set_wizard_step(index)
+        break
 
   def _expose_controller_aliases(self) -> None:
-    """Expose child widgets under stable attribute names for controllers.
-
-    :return: None
-    """
+    """Expose child widgets under stable attribute names for controllers and regression tests."""
+    # Account controls (Page 1 & Page 5)
     self.account_dropdown = self.executor_page.account_dropdown
     self.random_account_btn = self.executor_page.random_account_btn
     self.add_account_btn = self.accounts_page.add_account_btn
+    self.import_json_btn = getattr(self.accounts_page, "import_json_btn", self.add_account_btn)
     self.accounts_table = self.accounts_page.accounts_table
     self.accounts_edit_btn = self.accounts_page.accounts_edit_btn
     self.accounts_delete_btn = self.accounts_page.accounts_delete_btn
     self.accounts_random_btn = self.accounts_page.accounts_random_btn
 
-    self.folder_dropdown = self.executor_page.folder_dropdown
-    self.browse_button = self.executor_page.browse_button
-    self.scan_button = self.executor_page.scan_button
+    # Video / Folder controls (Page 2)
+    self.folder_dropdown = self.videos_page.folder_dropdown
+    self.browse_button = self.videos_page.browse_button
+    self.scan_button = self.videos_page.scan_button
     self.file_count_label = self.executor_page.file_count_label
-    self.folders_table = self.folders_page.folders_table
-    self.add_folder_btn = self.folders_page.add_folder_btn
+    self.folders_table = self.videos_page.folders_table
+    self.add_folder_btn = self.videos_page.add_folder_btn
 
-    self.caption_input = self.executor_page.caption_input
-    self.caption_preview = self.executor_page.caption_preview
+    # Schedule & Caption configuration controls (Page 3)
+    self.caption_input = self.config_page.caption_input
+    self.caption_preview = self.config_page.caption_preview
+    self.prefix_caption_check = self.config_page.prefix_caption_check
+    self.start_date = self.config_page.start_date
+    self.end_date = self.config_page.end_date
+    self.time_start_hour = self.config_page.time_start_hour
+    self.time_start_minute = self.config_page.time_start_minute
+    self.time_end_hour = self.config_page.time_end_hour
+    self.time_end_minute = self.config_page.time_end_minute
+    self.interval_spin = self.config_page.interval_spin
+    self.limit_spin = self.config_page.limit_spin
+    self.schedule_warning = self.config_page.schedule_warning
+    self.time_warning = self.config_page.time_warning
+    self.schedule_result_label = self.config_page.schedule_result_label
+    self.generate_btn = self.config_page.generate_btn
+
+    # Execution & Live Terminal controls (Page 5)
     self.headless_check = self.executor_page.headless_check
     self.retry_check = self.executor_page.retry_check
     self.start_btn = self.executor_page.start_btn
     self.stop_btn = self.executor_page.stop_btn
     self.pause_btn = self.executor_page.pause_btn
+    self.resume_btn = self.executor_page.resume_btn
     self.export_btn = self.executor_page.export_btn
-    self.generate_btn = self.executor_page.generate_btn
     self.progress_bar = self.executor_page.progress_bar
     self.progress_label = self.executor_page.progress_label
     self.success_label = self.executor_page.success_label
@@ -181,52 +209,54 @@ class MainWindow(QMainWindow):
     self.toggle_log_btn = self.executor_page.toggle_log_btn
     self.log_clear_button = self.executor_page.log_clear_button
 
-    self.start_date = self.executor_page.start_date
-    self.end_date = self.executor_page.end_date
-    self.time_start_hour = self.executor_page.time_start_hour
-    self.time_start_minute = self.executor_page.time_start_minute
-    self.time_end_hour = self.executor_page.time_end_hour
-    self.time_end_minute = self.executor_page.time_end_minute
-    self.interval_spin = self.executor_page.interval_spin
-    self.limit_spin = self.executor_page.limit_spin
-    self.schedule_warning = self.executor_page.schedule_warning
-    self.time_warning = self.executor_page.time_warning
-    self.schedule_result_label = self.executor_page.schedule_result_label
-
     self.theme_mode_combo = self.settings_page.theme_mode_combo
 
   def _bind_theme_controls(self) -> None:
-    """Connect theme and log related controls.
-
-    :return: None
-    """
     self.theme_mode_combo.currentTextChanged.connect(self._on_theme_mode_changed)
-    self.toggle_log_btn.clicked.connect(self._focus_terminal_log)
+    self.toggle_log_btn.clicked.connect(self._open_logs_dialog)
+    self.stepper_bar.open_logs_requested.connect(self._open_logs_dialog)
+    self.stepper_bar.open_settings_requested.connect(self._open_settings_dialog)
     self.log_clear_button.clicked.connect(self._clear_log)
     self._theme_manager.theme_changed.connect(lambda _mode: self._apply_theme_state())
 
-  def _on_theme_mode_changed(self, mode_text: str) -> None:
-    """Apply the theme selected on the settings page.
+  def set_log_file_path(self, log_file_path: Path) -> None:
+    self._log_file_path = log_file_path
 
-    :param mode_text: Selected theme label.
-    :return: None
-    """
+  def _open_logs_dialog(self) -> None:
+    if self._logs_dialog is None:
+      self._logs_dialog = LogsDialog(
+        palette=self._theme_manager.palette,
+        log_file_path=self._log_file_path,
+        parent=self,
+      )
+      self._logs_dialog.set_entries(self._session_logs)
+    self._logs_dialog.show()
+    self._logs_dialog.raise_()
+    self._logs_dialog.activateWindow()
+
+  def _open_settings_dialog(self) -> None:
+    if self._settings_dialog is None:
+      self._settings_dialog = QDialog(self)
+      self._settings_dialog.setWindowTitle("TikTok Scheduler — Configurações de Tema")
+      self._settings_dialog.resize(520, 420)
+      lay = QVBoxLayout(self._settings_dialog)
+      lay.setContentsMargins(0, 0, 0, 0)
+      lay.addWidget(self.settings_page)
+    self._settings_dialog.show()
+    self._settings_dialog.raise_()
+    self._settings_dialog.activateWindow()
+
+  def _on_theme_mode_changed(self, mode_text: str) -> None:
     self._theme_manager.apply_theme(mode_text.lower())
 
   def _apply_theme_state(self) -> None:
-    """Refresh widgets that depend on the active theme.
-
-    :return: None
-    """
     palette = self._theme_manager.palette
     self.executor_page.set_palette_data(palette)
+    if self._logs_dialog is not None:
+      self._logs_dialog.set_palette_data(palette)
     self._sync_theme_combo()
 
   def _sync_theme_combo(self) -> None:
-    """Synchronize the settings combo with the active theme.
-
-    :return: None
-    """
     label = self._theme_manager.theme_label()
     self.theme_mode_combo.blockSignals(True)
     index = self.theme_mode_combo.findText(label)
@@ -234,59 +264,17 @@ class MainWindow(QMainWindow):
       self.theme_mode_combo.setCurrentIndex(index)
     self.theme_mode_combo.blockSignals(False)
 
-  def _set_current_page(self, key: str) -> None:
-    """Switch the visible top tab.
-
-    :param key: Page key.
-    :return: None
-    """
-    for index, (page_key, _page, _title, _description) in enumerate(self._page_order):
-      if page_key == key:
-        self.tab_widget.setCurrentIndex(index)
-        break
-
-  def _on_tab_changed(self, index: int) -> None:
-    """Handle top-tab changes.
-
-    :param index: Active tab index.
-    :return: None
-    """
-    if 0 <= index < len(self._page_order):
-      _key, _page, title, description = self._page_order[index]
-      self.setWindowTitle(title if description else self.WINDOW_TITLE)
-
   def _clear_log(self) -> None:
-    """Clear both visible log views.
-
-    :return: None
-    """
     self.log_panel.clear()
 
-  def _focus_terminal_log(self) -> None:
-    """Focus the terminal log and scroll to the latest entry.
-
-    :return: None
-    """
-    self.log_panel.setFocus()
-    self.log_panel.moveCursor(QTextCursor.MoveOperation.End)
-
   def append_log(self, message: str, level: int = 20) -> None:
-    """Append a log message from any thread.
-
-    :param message: Formatted log line.
-    :param level: Numeric log level.
-    :return: None
-    """
     self._log_signal.emit(message, level)
 
   def _do_append_log(self, message: str, level: int) -> None:
-    """Append a log message on the GUI thread.
-
-    :param message: Formatted log line.
-    :param level: Numeric log level.
-    :return: None
-    """
+    self._session_logs.append((message, level))
     self.log_panel.append_message(message, level)
+    if self._logs_dialog is not None:
+      self._logs_dialog.append_entry(message, level)
 
   def update_progress(
     self,
@@ -295,14 +283,6 @@ class MainWindow(QMainWindow):
     success: int,
     failed: int,
   ) -> None:
-    """Update progress widgets in the Main tab.
-
-    :param current: Completed uploads.
-    :param total: Total uploads.
-    :param success: Successful uploads.
-    :param failed: Failed uploads.
-    :return: None
-    """
     progress = int((current / total) * 100) if total > 0 else 0
     self.progress_bar.setValue(progress)
     self.progress_label.setText(f"{progress}%")
@@ -310,76 +290,51 @@ class MainWindow(QMainWindow):
     self.failure_label.setText(f"Failed {failed}")
 
   def set_upload_running(self, running: bool) -> None:
-    """Toggle the UI between running and idle states.
-
-    :param running: Whether an upload is currently running.
-    :return: None
-    """
     self.start_btn.setEnabled(not running)
     self.stop_btn.setEnabled(running)
     self.pause_btn.setEnabled(running)
+    self.resume_btn.setEnabled(False)
     self.generate_btn.setEnabled(not running)
     self.folder_dropdown.setEnabled(not running)
     self.browse_button.setEnabled(not running)
     self.scan_button.setEnabled(not running)
     self.account_dropdown.setEnabled(not running)
     self.random_account_btn.setEnabled(not running)
+    self.add_account_btn.setEnabled(not running)
+    if hasattr(self, "import_json_btn"):
+      self.import_json_btn.setEnabled(not running)
+    self.accounts_edit_btn.setEnabled(not running)
+    self.accounts_delete_btn.setEnabled(not running)
+    self.accounts_random_btn.setEnabled(not running)
 
   def _set_widget_error_state(self, widget: QWidget, enabled: bool) -> None:
-    """Toggle error styling on a widget.
-
-    :param widget: Target widget.
-    :param enabled: Whether the error state is active.
-    :return: None
-    """
     widget.setProperty("state", "error" if enabled else "")
     widget.style().unpolish(widget)
     widget.style().polish(widget)
 
   def show_schedule_warning(self, message: str) -> None:
-    """Display an inline schedule warning.
-
-    :param message: Warning message.
-    :return: None
-    """
     self.schedule_warning.setText(message)
     self.schedule_warning.show()
     self._set_widget_error_state(self.start_date, True)
     self._set_widget_error_state(self.end_date, True)
 
   def clear_schedule_warning(self) -> None:
-    """Hide the schedule warning.
-
-    :return: None
-    """
     self.schedule_warning.clear()
     self.schedule_warning.hide()
     self._set_widget_error_state(self.start_date, False)
     self._set_widget_error_state(self.end_date, False)
 
   def show_time_warning(self, message: str) -> None:
-    """Display an inline time warning.
-
-    :param message: Warning message.
-    :return: None
-    """
     self.time_warning.setText(message)
     self.time_warning.show()
 
   def clear_time_warning(self) -> None:
-    """Hide the time warning.
-
-    :return: None
-    """
     self.time_warning.clear()
     self.time_warning.hide()
 
-  def set_actions_enabled(self, enabled: bool) -> None:
-    """Enable or disable scheduling actions.
-
-    :param enabled: Whether actions should be enabled.
-    :return: None
-    """
+  def set_actions_enabled(self, enabled: bool, has_tasks: bool = False) -> None:
     self.generate_btn.setEnabled(enabled)
-    if not enabled:
+    if not enabled and not has_tasks:
       self.start_btn.setEnabled(False)
+    elif has_tasks:
+      self.start_btn.setEnabled(True)

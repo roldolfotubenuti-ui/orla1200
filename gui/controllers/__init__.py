@@ -6,6 +6,7 @@ from gui.controllers.ui_helpers import ControllerUiMixin
 from gui.controllers.upload_worker import UploadWorker
 from gui.controllers.uploads import UploadExecutionControllerMixin
 from gui.controllers.videos import VideoQueueControllerMixin
+from gui.controllers.wizard import WizardControllerMixin
 
 __all__ = [
   "AccountsControllerMixin",
@@ -16,4 +17,5 @@ __all__ = [
   "UploadExecutionControllerMixin",
   "UploadWorker",
   "VideoQueueControllerMixin",
+  "WizardControllerMixin",
 ]

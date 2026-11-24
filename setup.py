@@ -50,13 +50,14 @@ def install_packages() -> None:
 
 
 def check_playwright_chromium() -> bool:
-    """Return True if Playwright Chromium browser is installed."""
+    """Return True if Playwright Chromium browser binary exists on disk."""
     try:
+        from pathlib import Path
         from playwright.sync_api import sync_playwright
 
         with sync_playwright() as p:
             path = p.chromium.executable_path
-            if path:
+            if path and Path(path).exists():
                 print(f"[setup] Chromium found: {path}")
                 return True
     except Exception:

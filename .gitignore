@@ -30,8 +30,11 @@ storage/**
 !storage/**/
 !storage/**/*.example.json
 
-
 cookies/*-cookie.json
+cookies/*.enc
+cookies/*.json
+*.enc
+accounts.json
 *.log
 
 # Test / scratch files
@@ -40,6 +43,17 @@ prompt.txt
 sample.mp4
 cli_test.py
 mangki.js
+*.mp4
+*.db
+*.sqlite
+*.sqlite3
+audit_*.png
+current_office_audit.png
+.thumbs/
+backups/
+release/
+installer/
+test_videos/
 
 # PyInstaller
 *.spec

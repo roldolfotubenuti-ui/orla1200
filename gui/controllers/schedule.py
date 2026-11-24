@@ -26,13 +26,14 @@ class ScheduleControllerMixin:
     )
 
     valid, reason = self._rules.validate_date_range(start_dt, end_dt)
+    has_tasks = bool(getattr(self, "_tasks", []))
     if valid:
       self._window.clear_schedule_warning()
-      self._window.set_actions_enabled(True)
+      self._window.set_actions_enabled(True, has_tasks=has_tasks)
       self._validate_time_selection()
     else:
       self._window.show_schedule_warning(reason)
-      self._window.set_actions_enabled(False)
+      self._window.set_actions_enabled(False, has_tasks=has_tasks)
 
   def _update_time_options(self) -> None:
     """Refresh available start-hour options for the selected date.
@@ -164,13 +165,14 @@ class ScheduleControllerMixin:
       int(hour_text),
       int(minute_text),
     )
+    has_tasks = bool(getattr(self, "_tasks", []))
     valid, _reason = self._rules.validate(selected_dt, now)
     if not valid:
       min_dt = self._rules.min_allowed_datetime(now)
       self._window.show_time_warning(
         f"Start time must be at least 15 min from now (earliest: {min_dt.strftime('%H:%M')})"
       )
-      self._window.set_actions_enabled(False)
+      self._window.set_actions_enabled(False, has_tasks=has_tasks)
       return
 
     self._window.clear_time_warning()
@@ -185,7 +187,7 @@ class ScheduleControllerMixin:
     )
     date_valid, _ = self._rules.validate_date_range(start_dt, end_dt, now)
     if date_valid:
-      self._window.set_actions_enabled(True)
+      self._window.set_actions_enabled(True, has_tasks=has_tasks)
 
   def _on_generate_schedule(self) -> None:
     """Generate schedule slots and assign them to selected videos.
@@ -242,30 +244,63 @@ class ScheduleControllerMixin:
       self._logger.error(f"Schedule generation failed: {exc}")
       return
 
+    # Filter out slots that conflict with existing scheduled/unknown uploads for the active account
+    username = self._window.account_dropdown.currentText()
+    conflicts_removed = 0
+    if username:
+      scheduled_data = self._storage_service.load_scheduled(username)
+      existing_uploads = [
+        u
+        for u in self._storage_service.get_user_uploads(scheduled_data)
+        if u.get("status") in ("success", "unknown")
+      ]
+      if existing_uploads:
+        conflicting_slots = set(
+          self._scheduler.detect_conflicts(slots, existing_uploads)
+        )
+        if conflicting_slots:
+          conflicts_removed = len(conflicting_slots)
+          slots = [s for s in slots if s not in conflicting_slots]
+
     selected_videos = self._get_selected_videos()
     if not selected_videos:
       self._logger.warning("No videos selected")
       return
 
     limit = self._window.limit_spin.value()
-    selected_videos = selected_videos[:limit]
-    slots = slots[:limit]
-    video_paths = [video.path for video in selected_videos]
+    requested_videos = selected_videos[:limit]
+    requested_count = len(requested_videos)
+    available_slots = slots[:requested_count]
+    video_paths = [video.path for video in requested_videos]
 
     caption_body = self._window.caption_input.toPlainText().strip()
     self._register_tags(caption_body)
+    use_prefix = (
+      hasattr(self._window, "prefix_caption_check")
+      and self._window.prefix_caption_check.isChecked()
+    )
     captions = [
-      self._build_caption(video.path, caption_body)
-      for video in selected_videos
+      self._build_caption(video.path, caption_body, include_prefix=use_prefix)
+      for video in requested_videos
     ]
 
-    self._tasks = self._scheduler.assign_videos(video_paths, slots, captions)
+    self._tasks = self._scheduler.assign_videos(
+      video_paths,
+      available_slots,
+      captions,
+    )
     self._update_table_schedule()
     self._window.start_btn.setEnabled(len(self._tasks) > 0)
     self._logger.info(f"Schedule generated: {len(self._tasks)} upload(s)")
-    self._window.schedule_result_label.setText(
-      f"Generated {len(self._tasks)} items. Review the queue table above the terminal."
-    )
+
+    summary_msg = f"Generated {len(self._tasks)} items. Review the queue table above the terminal."
+    if conflicts_removed > 0:
+      summary_msg += f" ({conflicts_removed} conflicting slot(s) skipped)."
+    if len(self._tasks) < requested_count:
+      skipped_count = requested_count - len(self._tasks)
+      summary_msg += f" Warning: {skipped_count} video(s) could not be scheduled (not enough slots in window)."
+
+    self._window.schedule_result_label.setText(summary_msg)
     self._window.schedule_result_label.show()
 
   @staticmethod
@@ -281,15 +316,22 @@ class ScheduleControllerMixin:
     return stem
 
   @staticmethod
-  def _build_caption(file_path: Path, caption_body: str) -> str:
+  def _build_caption(
+    file_path: Path,
+    caption_body: str,
+    include_prefix: bool = False,
+  ) -> str:
     """Build the final caption for a video.
 
     :param file_path: Path to the video file.
     :param caption_body: Combined caption and hashtag text.
+    :param include_prefix: Whether to prepend ``Cre: <videoid>``.
     :return: Assembled caption string.
     """
-    video_id = ScheduleControllerMixin._normalize_video_id(file_path)
-    parts = [f"Cre: {video_id}"]
+    parts: list[str] = []
+    if include_prefix:
+      video_id = ScheduleControllerMixin._normalize_video_id(file_path)
+      parts.append(f"Cre: {video_id}")
     if caption_body:
       parts.append(caption_body)
     return "\n".join(parts)

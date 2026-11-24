@@ -42,7 +42,7 @@ class ScheduleConfig:
   start_date: datetime
   end_date: datetime
   interval_minutes: int = 60
-  daily_limit: int = 5
+  daily_limit: int = 0
   time_window_start: tuple[int, int] = (9, 0)
   time_window_end: tuple[int, int] = (21, 0)
   randomize: bool = False
@@ -76,7 +76,7 @@ class Scheduler:
   scheduling rules via :class:`ScheduleRuleEngine`, detects conflicts,
   and assigns videos to time slots.
 
-  All boundary calculations (minimum offset, maximum calendar-month
+  All boundary calculations (minimum offset, maximum 10-day
   offset, minute step) are delegated to the rule engine so that GUI
   and backend share a single source of truth.
 
@@ -138,44 +138,52 @@ class Scheduler:
     )
 
     slots: list[datetime] = []
+    daily_counts: dict[object, int] = {}
     current = start
-    start_date = start.date()
 
-    # Config window applies only to the first day (today)
+    # Apply configured daily time window across all days in the schedule range
     cfg_start_h, cfg_start_m = config.time_window_start
     cfg_end_h, cfg_end_m = config.time_window_end
+    eff_start_total = cfg_start_h * 60 + cfg_start_m
+    eff_end_total = cfg_end_h * 60 + cfg_end_m
+
+    if eff_start_total > eff_end_total:
+      raise ScheduleError(
+        "Invalid daily time window: time_window_start > time_window_end"
+      )
 
     while current <= end:
-      # Determine effective window for the current day:
-      #   - First day (today): use config time window
-      #   - Future days: full day 00:00 – 23:55
-      if current.date() == start_date:
-        eff_start_h, eff_start_m = cfg_start_h, cfg_start_m
-        eff_end_h, eff_end_m = cfg_end_h, cfg_end_m
-      else:
-        eff_start_h, eff_start_m = 0, 0
-        eff_end_h, eff_end_m = 23, 55
+      day_key = current.date()
+      day_count = daily_counts.get(day_key, 0)
 
-      eff_start_total = eff_start_h * 60 + eff_start_m
-      eff_end_total = eff_end_h * 60 + eff_end_m
+      if config.daily_limit > 0 and day_count >= config.daily_limit:
+        next_day = current.replace(
+          hour=cfg_start_h,
+          minute=cfg_start_m,
+          second=0,
+          microsecond=0,
+        ) + timedelta(days=1)
+        current = next_day
+        continue
 
-      # Enforce time window
+      # Enforce daily time window
       current_time = current.hour * 60 + current.minute
 
       if current_time < eff_start_total:
         current = current.replace(
-          hour=eff_start_h,
-          minute=eff_start_m,
+          hour=cfg_start_h,
+          minute=cfg_start_m,
           second=0,
           microsecond=0,
         )
         continue
 
       if current_time > eff_end_total:
-        # Roll to next day at midnight; the loop will compute
-        # the effective window for that day on the next iteration
         next_day = current.replace(
-          hour=0, minute=0, second=0, microsecond=0,
+          hour=cfg_start_h,
+          minute=cfg_start_m,
+          second=0,
+          microsecond=0,
         ) + timedelta(days=1)
         current = next_day
         continue
@@ -193,10 +201,13 @@ class Scheduler:
 
       # Hard-validate via rule engine after rounding/randomization
       valid, _ = self._rules.validate(slot, now)
-      if valid:
+      if valid and slot <= end:
         slot_time = slot.hour * 60 + slot.minute
         if eff_start_total <= slot_time <= eff_end_total:
-          slots.append(slot)
+          slot_day = slot.date()
+          if config.daily_limit <= 0 or daily_counts.get(slot_day, 0) < config.daily_limit:
+            slots.append(slot)
+            daily_counts[slot_day] = daily_counts.get(slot_day, 0) + 1
 
       current += timedelta(minutes=config.interval_minutes)
 

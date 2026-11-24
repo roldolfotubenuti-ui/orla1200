@@ -1,13 +1,14 @@
 {
-  "windowSize": { "width": 1200, "height": 860 },
-  "minWindowSize": { "width": 900, "height": 620 },
+  "windowSize": { "width": 1400, "height": 850 },
+  "minWindowSize": { "width": 1050, "height": 700 },
   "theme": "neumorphism_dark",
   "primaryColor": "#1E66FF",
   "logLevel": "DEBUG",
   "enableVerbose": true,
   "headlessDefault": true,
   "scheduleRules": {
-    "minOffsetMinutes": 15,
+    "minOffsetMinutes": 30,
+    "maxOffsetDays": 10,
     "maxOffsetMonths": 1,
     "minuteStep": 5
   },

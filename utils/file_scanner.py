@@ -116,21 +116,25 @@ class FileScanner:
   @staticmethod
   def get_scheduled_basenames(scheduled: list[dict]) -> set[str]:
     """
-    Extract the set of basenames from scheduled upload records.
+    Extract the set of basenames from scheduled upload records whose latest
+    status is 'success' or 'unknown' (preventing duplicate/unverified re-uploads).
 
     :param scheduled: List of upload record dicts.
     :type scheduled: list[dict]
-    :return: Set of basenames that have status 'success'.
+    :return: Set of basenames that have latest status 'success' or 'unknown'.
     :rtype: set[str]
     """
-    names: set[str] = set()
+    latest_status: dict[str, str] = {}
     for record in scheduled:
       file_val = record.get("file", "")
       status = record.get("status", "")
-      if file_val and status == "success":
-        # file_val may be basename or full path — extract name part
-        names.add(Path(file_val).name)
-    return names
+      if file_val and status:
+        latest_status[Path(file_val).name] = status
+    return {
+      name
+      for name, status in latest_status.items()
+      if status in ("success", "unknown")
+    }
 
   def detect_duplicates(self, files: list[VideoFile]) -> list[list[VideoFile]]:
     """

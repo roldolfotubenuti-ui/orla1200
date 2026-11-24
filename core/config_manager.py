@@ -29,7 +29,8 @@ class ConfigManager:
     "enableVerbose": False,
     "headlessDefault": True,
     "scheduleRules": {
-      "minOffsetMinutes": 15,
+      "minOffsetMinutes": 30,
+      "maxOffsetDays": 10,
       "maxOffsetMonths": 1,
       "minuteStep": 5,
     },
@@ -263,7 +264,17 @@ class ConfigManager:
     :rtype: int
     """
     rules = self._data.get("scheduleRules", {})
-    return int(rules.get("minOffsetMinutes", 15))
+    return int(rules.get("minOffsetMinutes", 25))
+
+  @property
+  def max_offset_days(self) -> int:
+    """
+    Maximum future offset for scheduling (days). TikTok official limit is 10 days.
+
+    :rtype: int
+    """
+    rules = self._data.get("scheduleRules", {})
+    return int(rules.get("maxOffsetDays", 10))
 
   @property
   def max_offset_months(self) -> int:

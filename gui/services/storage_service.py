@@ -333,13 +333,62 @@ class GuiStorageService:
       f"Migrated {len(entries)} published entry/entries for @{username}"
     )
 
+  @staticmethod
+  def normalize_upload_record(record: dict) -> dict:
+    """Normalize legacy and runtime records into consistent standardized status.
+
+    Preserves original disk entries without destructive rewrites, while ensuring
+    accurate categorization in the UI and state reporting.
+
+    :param record: Raw record dictionary from disk.
+    :return: Normalized record dictionary.
+    """
+    normalized = dict(record)
+    st = str(normalized.get("status") or "pending").lower().strip()
+    sched_iso = normalized.get("schedule_time")
+    outcome = str(normalized.get("outcome") or "").lower().strip()
+
+    # Rule 1: Unknown outcomes remain 'unknown'
+    if outcome == "unknown" or st == "unknown":
+      normalized["status"] = "unknown"
+      return normalized
+
+    # Rule 2: Explicit failures remain 'failed'
+    if "fail" in st or "erro" in st or outcome == "confirmed_failure":
+      normalized["status"] = "failed"
+      return normalized
+
+    # Rule 3: Cancelled and conflict
+    if "cancel" in st:
+      normalized["status"] = "cancelled"
+      return normalized
+    if "conflict" in st:
+      normalized["status"] = "conflict"
+      return normalized
+
+    # Rule 4: Intermediate states
+    if st in ("received", "pending", "uploading", "verifying", "confirming"):
+      return normalized
+
+    # Rule 5: Success / Scheduled / Published distinction
+    # A confirmed upload with schedule_time MUST be classified as 'scheduled', NEVER 'published'
+    if st in ("success", "scheduled", "published") or outcome == "confirmed_success":
+      if sched_iso:
+        normalized["status"] = "scheduled"
+      else:
+        normalized["status"] = "published"
+      return normalized
+
+    return normalized
+
   def get_user_uploads(self, data: dict) -> list[dict]:
-    """Extract the upload list from a schedule record.
+    """Extract the normalized upload list from a schedule record.
 
     :param data: Schedule record dictionary.
-    :return: Upload records.
+    :return: Normalized upload records.
     """
-    return data.get("uploads", [])
+    raw_uploads = data.get("uploads", [])
+    return [self.normalize_upload_record(u) for u in raw_uploads if isinstance(u, dict)]
 
   def append_upload_record(
     self,
@@ -358,18 +407,40 @@ class GuiStorageService:
       data["uploads"] = []
 
     scheduled_at = task.schedule_time or result.timestamp
+    if getattr(result, "status", ""):
+      status = result.status
+    elif getattr(result, "outcome", "") == "unknown":
+      status = "unknown"
+    elif result.success:
+      status = "scheduled" if task.schedule_time else "published"
+    else:
+      status = "failed"
+
+    # Remove any prior 'pending' placeholder for this file before appending final execution record
+    data["uploads"] = [
+      u
+      for u in data["uploads"]
+      if not (
+        Path(str(u.get("file", ""))).name == task.file_path.name
+        and str(u.get("status", "")).lower() in ("pending", "received")
+      )
+    ]
+
     record = {
       "file": task.file_path.name,
+      "file_path": str(task.file_path),
       "caption": task.caption,
       "schedule_time": (
         DateTimeUtils.format_iso(task.schedule_time)
         if task.schedule_time else None
       ),
-      "status": "success" if result.success else "failed",
+      "status": status,
+      "outcome": getattr(result, "outcome", "confirmed_success" if result.success else "confirmed_failure"),
       "timestamp": int(scheduled_at.timestamp()),
       "video_id": None,
       "cm": result.cm,
       "qc": result.qc,
+      "error": result.error,
     }
     data["uploads"].append(record)
 
@@ -405,6 +476,88 @@ class GuiStorageService:
         continue
 
     return latest or None
+
+  def wizard_state_path(self, filename: str = "wizard-state.json") -> Path:
+    """Return path to the persistent wizard state JSON file.
+
+    :param filename: Relative filename inside storage directory.
+    :return: Path object.
+    """
+    return self._storage_dir / filename
+
+  def load_wizard_state(self, filename: str = "wizard-state.json") -> dict:
+    """Load persisted wizard state from disk.
+
+    :param filename: Relative filename inside storage directory.
+    :return: State dictionary.
+    """
+    path = self.wizard_state_path(filename)
+    data = self._read_json(path)
+    if isinstance(data, dict):
+      return data
+    return {}
+
+  def save_wizard_state(self, state: dict, filename: str = "wizard-state.json") -> None:
+    """Persist wizard state atomically to disk.
+
+    :param state: State dictionary to persist.
+    :param filename: Relative filename inside storage directory.
+    :return: None
+    """
+    path = self.wizard_state_path(filename)
+    self._write_json_atomic(path, state, "Failed to save wizard state")
+
+  def confirm_planned_schedules(self, username: str, planned_items: list[dict]) -> None:
+    """Save confirmed planned publications to the user's schedule storage atomically.
+
+    Updates or appends entries with status 'pending' so they are persisted
+    before execution starts, without duplicating existing entries for the same file.
+
+    :param username: Account username.
+    :param planned_items: List of planned item dicts.
+    :return: None
+    """
+    if not username:
+      return
+    data = self.load_scheduled(username)
+    if "uploads" not in data or not isinstance(data["uploads"], list):
+      data["uploads"] = []
+
+    # Remove any old 'pending' records for files in this confirmed batch
+    batch_files = {Path(str(item.get("file", ""))).name for item in planned_items}
+    data["uploads"] = [
+      u
+      for u in data["uploads"]
+      if not (
+        Path(str(u.get("file", ""))).name in batch_files
+        and u.get("status") == "pending"
+      )
+    ]
+
+    for item in planned_items:
+      file_name = Path(str(item.get("file", ""))).name
+      file_path = str(item.get("file_path", file_name))
+      schedule_iso = item.get("schedule_time")
+      ts = int(datetime.now().timestamp())
+      if isinstance(schedule_iso, str) and schedule_iso:
+        try:
+          ts = int(datetime.fromisoformat(schedule_iso).timestamp())
+        except ValueError:
+          pass
+      data["uploads"].append({
+        "file": file_name,
+        "file_path": file_path,
+        "caption": str(item.get("caption", "")),
+        "schedule_time": schedule_iso,
+        "status": str(item.get("status", "pending")).lower(),
+        "outcome": "pending",
+        "timestamp": ts,
+        "video_id": None,
+        "cm": False,
+        "qc": "",
+      })
+
+    self.save_scheduled(username, data)
 
   def _read_json(self, path: Path) -> object | None:
     """Read arbitrary JSON content from disk.

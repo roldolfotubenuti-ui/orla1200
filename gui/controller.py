@@ -18,6 +18,7 @@ from gui.controllers import (
   UploadExecutionControllerMixin,
   UploadWorker,
   VideoQueueControllerMixin,
+  WizardControllerMixin,
 )
 from gui.main_window import MainWindow
 from gui.services import GuiStorageService
@@ -32,6 +33,7 @@ class GUIController(
   VideoQueueControllerMixin,
   ScheduleControllerMixin,
   UploadExecutionControllerMixin,
+  WizardControllerMixin,
 ):
   """Coordinate GUI workflows without keeping all logic in one file.
 
@@ -63,10 +65,13 @@ class GUIController(
     self._root = project_root
     self._cookies_dir = self._root / config.cookies_dir
 
+    self._log_file = self._root / config.storage_dir / "logs" / "execution.log"
     self._logger = LoggerManager(
       name="TikTokGUI",
+      log_file=self._log_file,
       level=config.effective_log_level,
     )
+    self._window.set_log_file_path(self._log_file)
     self._storage_service = GuiStorageService(
       project_root=self._root,
       storage_dir_name=config.storage_dir,
@@ -93,8 +98,10 @@ class GUIController(
 
     self._scheduled_basenames: set[str] = set()
     self._failed_basenames: set[str] = set()
+    self._unknown_basenames: set[str] = set()
     self._published_video_ids: set[str] = set()
     self._published_entries: dict[str, str] = {}
+    self._prefix_video_id_in_caption: bool = False
 
     self._logger.set_callback(self._on_log_message)
     for warning in config.warnings:
@@ -115,6 +122,7 @@ class GUIController(
     self._initialize_time_defaults()
     self._validate_date_range()
     self._validate_time_selection()
+    self._init_wizard_state()
 
     self._validation_timer = QTimer()
     self._validation_timer.timeout.connect(self._validate_date_range)
