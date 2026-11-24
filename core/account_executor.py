@@ -52,6 +52,7 @@ class AccountExecutor:
     ) -> None:
         self._runtime = browser_runtime
         self._account_manager = account_manager
+        self._account_mgr = account_manager
         self._uploader_factory = uploader_factory
         self._bridge = office_bridge or OfficeEventBridge.get_instance()
         self._logger = LoggerManager()
@@ -242,7 +243,7 @@ class AccountExecutor:
                 # o motor avança automaticamente para o próximo slot disponível na grade semanal
                 now_sp = datetime.now()
                 is_expired = False
-                db_instance = getattr(self, "_db", None) or getattr(self._account_mgr, "_db", None) or DatabaseManager.get_instance()
+                db_instance = getattr(self, "_db", None) or getattr(self._account_manager, "_db", None) or DatabaseManager.get_instance()
                 from core.daily_scheduler_rule import get_account_booked_slots
                 booked_slots = get_account_booked_slots(acc_id, db=db_instance, exclude_job_id=job.id)
                 

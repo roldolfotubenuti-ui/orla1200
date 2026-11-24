@@ -331,11 +331,12 @@ class LocalFolderWatcher:
                            SET status = ?, 
                                schedule_time = ?, 
                                file_path = ?, 
+                               caption = ?,
                                attempt_count = 0, 
                                error_message = NULL, 
                                updated_at = datetime('now') 
                            WHERE id = ?""",
-                        (JobStatus.READY_FOR_UPLOAD.value, scheduled_slot_str, str(path.resolve()), job_id),
+                        (JobStatus.READY_FOR_UPLOAD.value, scheduled_slot_str, str(path.resolve()), caption, job_id),
                     )
             logger.info(f"File {path.name} registered as job {job_id} for {mapping['account_username']} (status={cur_status} -> READY_FOR_UPLOAD)")
         else:
