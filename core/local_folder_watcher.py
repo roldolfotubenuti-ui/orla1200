@@ -148,7 +148,7 @@ class LocalFolderWatcher:
         self._is_running: bool = False
         self._detected_hashes: set[str] = set()
         self._processing_files: set[str] = set()
-        self._lock = asyncio.Lock() if asyncio.get_event_loop().is_running() else None
+        self._lock = threading.Lock()
 
         self._ensure_directories()
         self._load_existing_hashes()
