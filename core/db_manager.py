@@ -173,6 +173,25 @@ class DatabaseManager:
         except Exception as e:
             logger.debug(f"Column check for file_path: {e}")
 
+        # Ensure all DEFAULT_DEPARTMENTS exist in database
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for dept in DEFAULT_DEPARTMENTS:
+                conn.execute(
+                    """
+                    INSERT INTO departments (id, name, enabled, employee_id, drawer_id, created_at, updated_at)
+                    VALUES (?, ?, 1, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET 
+                        name = excluded.name,
+                        employee_id = excluded.employee_id,
+                        drawer_id = excluded.drawer_id,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (dept["id"], dept["name"], dept["employee_id"], dept["drawer_id"], now, now),
+                )
+        except Exception as e:
+            logger.debug(f"Ensure departments seed: {e}")
+
     def _apply_migration_v1(self, conn: sqlite3.Connection) -> None:
         """Migration v1: Core tables, indexes, and initial department seed."""
         logger.info("Applying SQLite schema migration v1...")
@@ -236,6 +255,25 @@ class DatabaseManager:
                 conn.execute("ALTER TABLE jobs ADD COLUMN file_path TEXT;")
         except Exception as e:
             logger.debug(f"Column check for file_path: {e}")
+
+        # Ensure all DEFAULT_DEPARTMENTS exist in database
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            for dept in DEFAULT_DEPARTMENTS:
+                conn.execute(
+                    """
+                    INSERT INTO departments (id, name, enabled, employee_id, drawer_id, created_at, updated_at)
+                    VALUES (?, ?, 1, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET 
+                        name = excluded.name,
+                        employee_id = excluded.employee_id,
+                        drawer_id = excluded.drawer_id,
+                        updated_at = excluded.updated_at;
+                    """,
+                    (dept["id"], dept["name"], dept["employee_id"], dept["drawer_id"], now, now),
+                )
+        except Exception as e:
+            logger.debug(f"Ensure departments seed: {e}")
 
         # 4. round_robin_cursors
         conn.execute("""
